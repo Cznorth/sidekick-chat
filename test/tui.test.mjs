@@ -39,7 +39,6 @@ test('stream snapshots update in place, finalize once, and preserve the input cu
   try {
     terminal.input('草稿');
     terminal.input('\u001b[D');
-    ui.quota([{ label: 'Codex', windows: [{ label: '5h', left: 67 }], at: Date.now() }]);
     ui.draft({ id: 'a', from: 'bot', text: '**流式**第一段' }, options);
     await terminal.flush();
     assert.match(terminal.text(), /流式第一段/);
@@ -51,7 +50,6 @@ test('stream snapshots update in place, finalize once, and preserve the input cu
     assert.ok(!terminal.text().includes('流式第一段'));
     assert.ok(!terminal.text().includes('正在生成'));
     assert.equal(terminal.text().split('最终正文').length - 1, 1);
-    assert.match(terminal.text(), /Codex 剩余 5h 67%/);
     terminal.input('X');
     terminal.input('\r');
     assert.deepEqual(sent, ['草X稿']);

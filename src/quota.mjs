@@ -64,11 +64,10 @@ export function formatQuota(rows, { detail = false } = {}) {
   }).join('\n');
 }
 
-/** Independent failures preserve each source's last good snapshot. No overlapping polls. */
-export function createQuotaMonitor(settings, onUpdate, { api = new SidekickApi(settings), agentsApi, interval = 60_000 } = {}) {
+/** Independent failures preserve each source's last good snapshot. Requests are made only by the usage command. */
+export function createQuotaReader(settings, { api = new SidekickApi(settings), agentsApi } = {}) {
   const values = {};
   const ctl = new AbortController();
-  let timer;
   let pending;
   let stopped = false;
   let ccApi = agentsApi;
@@ -87,7 +86,6 @@ export function createQuotaMonitor(settings, onUpdate, { api = new SidekickApi(s
       await Promise.allSettled(Object.entries(sources).map(async ([key, fetch]) => {
         try { values[key] = { data: await fetch(), failed: false }; }
         catch { values[key] = { ...values[key], failed: true }; }
-        if (!stopped) onUpdate(quotaRows(values));
       }));
       return quotaRows(values);
     })().finally(() => { pending = null; });
@@ -95,13 +93,6 @@ export function createQuotaMonitor(settings, onUpdate, { api = new SidekickApi(s
   }
   return {
     refresh,
-    start() {
-      if (timer || stopped) return;
-      onUpdate(quotaRows(values));
-      void refresh();
-      timer = setInterval(() => { void refresh(); }, interval);
-      timer.unref?.();
-    },
-    stop() { stopped = true; clearInterval(timer); ctl.abort(); },
+    stop() { stopped = true; ctl.abort(); },
   };
 }

@@ -1,6 +1,5 @@
 import { Container, Editor, Markdown, ProcessTerminal, Text, TuiMainScreen } from '@earendil-works/pi-tui';
 import { paint, formatMessage } from './format.mjs';
-import { formatQuota } from './quota.mjs';
 
 export function markdownTheme(color) {
   const style = (code) => (text) => paint(color, code, text);
@@ -25,7 +24,6 @@ export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTe
     drafts.delete(key);
   };
   const status = new Text('', 1, 0);
-  const hud = new Text('', 1, 0);
   const identity = (text) => text;
   const editor = new Editor(tui, {
     borderColor: (text) => paint(color, 'gray', text),
@@ -34,7 +32,6 @@ export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTe
   tui.addChild(transcript);
   tui.addChild(live);
   tui.addChild(status);
-  tui.addChild(hud);
   tui.addChild(editor);
   tui.addChild(new Text(paint(color, 'gray', 'Enter 发送 · Shift+Enter 换行 · ↑ 历史 · /help · Ctrl+C 退出'), 1, 0));
   tui.setFocus(editor);
@@ -85,7 +82,6 @@ export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTe
       tui.requestRender();
     },
     clearDrafts() { drafts.clear(); live.clear(); tui.requestRender(); },
-    quota(rows) { hud.setText(paint(color, 'gray', formatQuota(rows))); tui.requestRender(); },
     typing(on) { status.setText(on ? paint(color, 'gray', '… 正在输入') : ''); tui.requestRender(); },
     clear() { transcript.clear(); drafts.clear(); live.clear(); tui.requestRender(true); },
   };

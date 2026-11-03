@@ -28,7 +28,7 @@ import {
   plainMessage,
 } from './format.mjs';
 import { ask, askPassword } from './prompt.mjs';
-import { createQuotaMonitor, formatQuota } from './quota.mjs';
+import { createQuotaReader, formatQuota } from './quota.mjs';
 
 const PACKAGE_VERSION = (() => {
   try {
@@ -277,7 +277,7 @@ async function startChat(flags) {
   let closed = false;
   let ui = null;
   let streamTask = Promise.resolve();
-  const quotas = createQuotaMonitor(settings, (rows) => ui?.quota(rows));
+  const quotas = createQuotaReader(settings);
 
   const out = (text) => {
     if (ui) ui.out(text);
@@ -401,7 +401,7 @@ async function startChat(flags) {
           '/to <序号|名字>  切换会话',
           '/history [n]     重印最近 n 条(默认 20)',
           '/who             名册和连接状态',
-          '/quota           刷新额度，查看剩余比例和重置时间',
+          '/usage           查询额度，查看剩余比例和重置时间',
           '/clear           清屏',
           '/quit            退出(也可以 Ctrl-C)',
           '直接输入文字就是发给当前会话。',
@@ -440,6 +440,7 @@ async function startChat(flags) {
             .join('\n'),
         );
         return;
+      case 'usage':
       case 'quota':
         out(formatQuota(await quotas.refresh(), { detail: true }));
         return;
@@ -479,7 +480,6 @@ async function startChat(flags) {
 
   if (ui) {
     ui.start();
-    quotas.start();
   } else {
     rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
     rl.on('line', (line) => {

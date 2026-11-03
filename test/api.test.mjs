@@ -161,3 +161,26 @@ test('没登录时交互模式给出明确提示,而不是崩栈', async () => {
   assert.equal(child.code, 2);
   assert.match(String(child.stderr), /还没登录/);
 });
+
+test('/usage is a local command in plain mode and shows all four quota sources', async () => {
+  const world = await startFakeWorld();
+  try {
+    const output = await new Promise((resolve, reject) => {
+      let sent = false;
+      let quitting = false;
+      let text = '';
+      const child = execFile(process.execPath, [BIN, '--plain'], {
+        env: { ...process.env, SIDEKICK_URL: world.url, SIDEKICK_TOKEN: world.token, SIDEKICK_CONFIG: CONFIG },
+        timeout: 5000,
+      }, (err, stdout) => err ? reject(err) : resolve(stdout));
+      child.stdout.on('data', (chunk) => {
+        text += chunk;
+        if (!sent && text.includes('会话:')) { sent = true; child.stdin.write('/usage\n'); }
+        if (!quitting && text.includes('Claude Docker 剩余')) { quitting = true; child.stdin.write('/quit\n'); }
+      });
+    });
+    for (const name of ['OpenCode', 'Codex', 'Claude WSL', 'Claude Docker']) assert.ok(output.includes(`${name} 剩余`));
+    const api = new SidekickApi({ url: world.url, token: world.token });
+    assert.equal((await api.history('dm:sidekick')).messages.length, 0);
+  } finally { await world.close(); }
+});
