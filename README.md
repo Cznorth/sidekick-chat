@@ -30,6 +30,8 @@ npm i -g sidekick-chat     # 或者装到全局,命令就是 sidekick
 node cli/bin/sidekick.mjs
 ```
 
+0.2.1 起，交互界面实时显示服务器的流式回复草稿，支持生成中的 Markdown；正式消息到达后替换草稿，不重复显示。切换会话、断线、清屏或服务端撤回会清除临时草稿。草稿不落盘，重连只补正式消息。`--plain`、管道、一次性 `ask` 和 `--json` 只输出正式消息。
+
 需要 Node 22.19 以上。交互界面使用与 Pi agent 相同的 `@earendil-works/pi-tui`，支持 Markdown、中文换行、多行粘贴、输入历史和窗口缩放。
 
 Enter 发送，Shift+Enter 换行（终端需支持；也可用 Ctrl+J），↑/↓ 翻输入历史。回复和忙碌状态更新时保留输入草稿与光标。

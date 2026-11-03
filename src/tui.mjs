@@ -15,6 +15,14 @@ export function markdownTheme(color) {
 export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTerminal() }) {
   const tui = new TuiMainScreen(terminal);
   const transcript = new Container();
+  const live = new Container();
+  const drafts = new Map();
+  const draftKey = (frame) => `${frame.from}:${frame.id}`;
+  const dropDraft = (key) => {
+    const draft = drafts.get(key);
+    if (draft) live.removeChild(draft.container);
+    drafts.delete(key);
+  };
   const status = new Text('', 1, 0);
   const identity = (text) => text;
   const editor = new Editor(tui, {
@@ -22,6 +30,7 @@ export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTe
     selectList: Object.fromEntries(['selectedPrefix', 'selectedText', 'description', 'scrollInfo', 'noMatch'].map((key) => [key, identity])),
   });
   tui.addChild(transcript);
+  tui.addChild(live);
   tui.addChild(status);
   tui.addChild(editor);
   tui.addChild(new Text(paint(color, 'gray', 'Enter 发送 · Shift+Enter 换行 · ↑ 历史 · /help · Ctrl+C 退出'), 1, 0));
@@ -44,6 +53,7 @@ export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTe
     stop: () => tui.stop(),
     out(text) { transcript.addChild(new Text(text, 1, 0)); tui.requestRender(); },
     message(message, options) {
+      if (message.draft) dropDraft(draftKey({ from: message.from, id: message.draft }));
       const header = formatMessage({ ...message, text: '', images: [] }, options).trimEnd();
       transcript.addChild(new Text(`\n${header}`, 1, 0));
       transcript.addChild(message.from === 'user'
@@ -52,7 +62,27 @@ export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTe
       for (const name of message.images ?? []) transcript.addChild(new Text(`[图片] ${options.imageUrl?.(name) || name}`, 2, 0));
       tui.requestRender();
     },
+    draft(frame, options) {
+      if (!frame?.id || !frame.from) return;
+      const key = draftKey(frame);
+      if (frame.end) dropDraft(key);
+      else if (typeof frame.text === 'string') {
+        let draft = drafts.get(key);
+        if (!draft) {
+          const container = new Container();
+          const header = formatMessage({ from: frame.from, ts: Date.now(), text: '' }, options).trimEnd();
+          container.addChild(new Text(`\n${header} · 正在生成`, 1, 0));
+          const body = new Markdown(frame.text, 2, 0, markdownTheme(color));
+          container.addChild(body);
+          draft = { container, body };
+          drafts.set(key, draft);
+          live.addChild(container);
+        } else draft.body.setText(frame.text);
+      }
+      tui.requestRender();
+    },
+    clearDrafts() { drafts.clear(); live.clear(); tui.requestRender(); },
     typing(on) { status.setText(on ? paint(color, 'gray', '… 正在输入') : ''); tui.requestRender(); },
-    clear() { transcript.clear(); tui.requestRender(true); },
+    clear() { transcript.clear(); drafts.clear(); live.clear(); tui.requestRender(true); },
   };
 }

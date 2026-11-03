@@ -30,6 +30,59 @@ class Terminal {
   }
 }
 
+test('stream snapshots update in place, finalize once, and preserve the input cursor', async () => {
+  const terminal = new Terminal();
+  const sent = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit: (text) => sent.push(text), onQuit() {} });
+  const options = { bots: [{ id: 'bot', name: '秘书' }], color: false };
+  ui.start();
+  try {
+    terminal.input('草稿');
+    terminal.input('\u001b[D');
+    ui.draft({ id: 'a', from: 'bot', text: '**流式**第一段' }, options);
+    await terminal.flush();
+    assert.match(terminal.text(), /流式第一段/);
+    ui.draft({ id: 'a', from: 'bot', text: '**流式**第一段第二段' }, options);
+    await terminal.flush();
+    assert.equal(terminal.text().split('流式第一段第二段').length - 1, 1);
+    ui.message({ seq: 1, from: 'bot', ts: 0, draft: 'a', text: '最终正文' }, options);
+    await terminal.flush();
+    assert.ok(!terminal.text().includes('流式第一段'));
+    assert.ok(!terminal.text().includes('正在生成'));
+    assert.equal(terminal.text().split('最终正文').length - 1, 1);
+    terminal.input('X');
+    terminal.input('\r');
+    assert.deepEqual(sent, ['草X稿']);
+  } finally {
+    ui.stop();
+    await terminal.flush();
+    terminal.screen.dispose();
+  }
+});
+
+test('draft cancellation and disconnect cleanup do not remove other senders or final messages', async () => {
+  const terminal = new Terminal();
+  const ui = createChatUI({ color: false, terminal, onSubmit() {}, onQuit() {} });
+  ui.start();
+  try {
+    ui.message({ from: 'bot', ts: 0, text: '已发送正文' }, {});
+    ui.draft({ id: 'same', from: 'a', text: '撤回的草稿' }, {});
+    ui.draft({ id: 'same', from: 'b', text: '另一成员草稿' }, {});
+    ui.draft({ id: 'same', from: 'a', end: true }, {});
+    await terminal.flush();
+    assert.ok(!terminal.text().includes('撤回的草稿'));
+    assert.match(terminal.text(), /另一成员草稿/);
+    ui.clearDrafts();
+    await terminal.flush();
+    assert.ok(!terminal.text().includes('另一成员草稿'));
+    assert.match(terminal.text(), /已发送正文/);
+  } finally {
+    ui.stop();
+    await terminal.flush();
+    terminal.screen.dispose();
+  }
+});
+
 test('Pi renderer preserves a wrapped Chinese draft and cursor while a Markdown reply arrives and terminal resizes', async () => {
   const terminal = new Terminal();
   const sent = [];

@@ -323,7 +323,10 @@ async function startChat(flags) {
   function applyState(next) {
     if (!next) return;
     state = next;
-    if (!convOf(convId)) convId = pickConv(state, '');
+    if (!convOf(convId)) {
+      ui?.clearDrafts();
+      convId = pickConv(state, '');
+    }
   }
 
   function onMessage(m) {
@@ -348,6 +351,7 @@ async function startChat(flags) {
       device: settings.device,
       signal: ctl.signal,
       onStatus: (kind) => {
+        if (kind === 'closed' || kind === 'error') ui?.clearDrafts();
         // 只在「连着的时候断了」和「重新接上」各说一句,退避重试期间不刷屏。
         if (kind === 'open') {
           if (everConnected) out(paint(color, 'green', '已重新连上'));
@@ -360,6 +364,11 @@ async function startChat(flags) {
       onEvent(event, payload) {
         if (event === 'hello' || event === 'state') applyState(payload.state ?? payload);
         else if (event === 'message') onMessage(payload);
+        else if (event === 'draft' && ui) {
+          // End frames have no conversation; remove only the matching sender/id.
+          if (payload.end || payload.conv === convId) ui.draft(payload, { bots: state.bots, color });
+          else ui.draft({ ...payload, end: true }, { bots: state.bots, color });
+        }
         else if (event === 'busy') typing(Boolean(payload.busy));
       },
     })
@@ -370,6 +379,7 @@ async function startChat(flags) {
     });
 
   function switchConv(next) {
+    ui?.clearDrafts();
     convId = next;
     const cfg = { ...readConfig(), url: settings.url, conv: convId, device: settings.device };
     writeConfig(cfg);
