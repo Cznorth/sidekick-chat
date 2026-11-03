@@ -1,0 +1,32 @@
+{
+  "name": "sidekick-chat",
+  "version": "0.1.0",
+  "description": "Sidekick 终端客户端:在终端里和秘书对话",
+  "type": "module",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "sidekick": "bin/sidekick.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "sidekick",
+    "cli",
+    "chat",
+    "assistant"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cznorth/sidekick-chat.git"
+  }
+}
