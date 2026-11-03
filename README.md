@@ -30,6 +30,8 @@ npm i -g sidekick-chat     # 或者装到全局,命令就是 sidekick
 node cli/bin/sidekick.mjs
 ```
 
+0.2.2 起，输入框上方 HUD 显示 OpenCode、Codex、Claude WSL 和 Claude Docker 的剩余额度，每分钟刷新。显示采样时间，刷新失败保留旧值并标注；无数据时显示未知。`/quota` 可立即刷新并查看本地日期时间标注的重置时间，纯文本交互也支持。额度沿用 App 的接口，凭据只用于访问同一服务器；不需要在 CLI 配置模型 API key。
+
 0.2.1 起，交互界面实时显示服务器的流式回复草稿，支持生成中的 Markdown；正式消息到达后替换草稿，不重复显示。切换会话、断线、清屏或服务端撤回会清除临时草稿。草稿不落盘，重连只补正式消息。`--plain`、管道、一次性 `ask` 和 `--json` 只输出正式消息。
 
 需要 Node 22.19 以上。交互界面使用与 Pi agent 相同的 `@earendil-works/pi-tui`，支持 Markdown、中文换行、多行粘贴、输入历史和窗口缩放。
@@ -73,6 +75,7 @@ sidekick --device 家里的电脑 "…"   # 换一个署名(默认「终端」)
 | `/to <序号\|名字>` | 切换会话 |
 | `/history [n]` | 重印最近 n 条,默认 20 |
 | `/who` | 名册:谁在线、谁在忙 |
+| `/quota` | 刷新额度，查看剩余比例、采样和重置时间 |
 | `/clear` | 清屏 |
 | `/quit` | 退出(也可以 Ctrl-C) |
 

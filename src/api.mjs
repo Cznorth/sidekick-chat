@@ -61,7 +61,7 @@ export class SidekickApi {
     throw last;
   }
 
-  async request(method, path, body) {
+  async request(method, path, body, { signal } = {}) {
     return this.attempt(async (base) => {
       const url = `${base}/${path.replace(/^\/+/, '')}`;
       let res;
@@ -70,9 +70,10 @@ export class SidekickApi {
           method,
           headers: this.headers,
           body: body === undefined ? undefined : JSON.stringify(body),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
       } catch (err) {
+        if (signal?.aborted) throw signal.reason;
         throw new NetworkError(networkHint(url, err));
       }
       const data = await res.json().catch(() => ({}));
