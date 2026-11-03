@@ -1,11 +1,11 @@
 {
   "name": "sidekick-chat",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Sidekick 终端客户端:在终端里和秘书对话",
   "type": "module",
   "license": "PolyForm-Noncommercial-1.0.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   },
   "bin": {
     "sidekick": "bin/sidekick.mjs"
@@ -28,5 +28,11 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Cznorth/sidekick-chat.git"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "1.0.0"
+  },
+  "devDependencies": {
+    "@xterm/headless": "5.5.0"
   }
 }

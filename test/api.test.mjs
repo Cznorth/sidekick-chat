@@ -123,6 +123,35 @@ test('sidekick --version 和 --help 不用登录也能跑', async () => {
   assert.match(help.stdout, /sidekick login/);
 });
 
+test('interactive plain/pipe output has no escapes and prints an SSE echo only once', async () => {
+  const world = await startFakeWorld();
+  try {
+    for (const flags of [[], ['--plain']]) {
+      const text = flags.length ? '测试纯文本' : '测试管道';
+      const output = await new Promise((resolve, reject) => {
+        let stdout = '';
+        let sent = false;
+        const child = execFile(process.execPath, [BIN, ...flags], {
+          env: { ...process.env, SIDEKICK_URL: world.url, SIDEKICK_TOKEN: world.token, SIDEKICK_CONFIG: CONFIG, FORCE_COLOR: '1' },
+          timeout: 5000,
+        }, (err, result) => err ? reject(err) : resolve(result));
+        child.stdout.on('data', (chunk) => {
+          stdout += chunk;
+          if (!sent && stdout.includes('会话:')) {
+            sent = true;
+            child.stdin.write(`${text}\n`);
+          }
+          if (stdout.includes(`收到:${text}`)) child.stdin.write('/quit\n');
+        });
+      });
+      assert.ok(!output.includes('\u001b'));
+      assert.equal(output.split(`\n  ${text}\n`).length - 1, 1);
+    }
+  } finally {
+    await world.close();
+  }
+});
+
 test('没登录时交互模式给出明确提示,而不是崩栈', async () => {
   await run(process.execPath, [BIN, 'logout'], { env: { ...process.env, SIDEKICK_CONFIG: CONFIG } });
   const child = await run(process.execPath, [BIN, 'ask', '在吗'], {

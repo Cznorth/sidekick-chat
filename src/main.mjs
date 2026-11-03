@@ -263,45 +263,38 @@ async function startChat(flags) {
   }
 
   // 老终端(不认 ANSI)和管道里别用转义序列:重画输入行会留下「[K」这类垃圾。
-  const vt = Boolean(process.stdout.isTTY) && !flags.plain && process.env.SIDEKICK_PLAIN !== '1';
+  const vt = Boolean(process.stdout.isTTY && process.stdin.isTTY) && process.env.TERM !== 'dumb' && !flags.plain && process.env.SIDEKICK_PLAIN !== '1';
   const color = flags.noColor || !vt ? false : colorsEnabled();
   const convTitle = (id) => state.conversations.find((c) => c.id === id)?.title || id;
   const convOf = (id) => state.conversations.find((c) => c.id === id);
   let convId = pickConv(state, settings.conv);
   let latest = state.latest || 0;
   let everConnected = false;
-  const own = new Set();
+  const displayed = new Set();
   const ctl = new AbortController();
   let rl = null;
   let closed = false;
+  let ui = null;
+  let streamTask = Promise.resolve();
 
   const out = (text) => {
-    if (!rl || closed || !vt) {
-      process.stdout.write(`${text}\n`);
-      return;
-    }
-    // 先清掉正在输入的那行,打印完再把用户没提交的半截话放回提示符后面。
-    process.stdout.write('\r\u001b[K');
-    process.stdout.write(`${text}\n`);
-    reprompt();
+    if (ui) ui.out(text);
+    else process.stdout.write(`${text}\n`);
   };
+  const typing = (on) => ui?.typing(on);
 
-  // 管道输入(terminal=false)时 readline 会自己把提示符写进输出,别重复写。
-  const reprompt = () => {
-    if (rl && !closed && rl.terminal) rl.prompt(true);
+  const printMessage = (message) => {
+    const options = { bots: state.bots, color, imageUrl: (name) => api.imageUrl(name) };
+    if (ui) ui.message(message, options);
+    else out(formatMessage(message, options));
   };
-
-  let typingShown = false;
-  const typing = (on) => {
-    if (!vt || !process.stderr.isTTY) return;
-    if (on && !typingShown) {
-      process.stderr.write(paint(color, 'gray', '… 正在输入'));
-      typingShown = true;
-    } else if (!on && typingShown) {
-      process.stderr.write('\r\u001b[K');
-      typingShown = false;
-    }
-  };
+  if (vt) {
+    const { createChatUI } = await import('./tui.mjs');
+    ui = createChatUI({ color, onSubmit: (text) => {
+      queue.push(() => text.startsWith('/') ? handleSlash(text) : sendText(text));
+      void drain();
+    }, onQuit: () => shutdown(0) });
+  }
 
   async function printHistory(limit = 20) {
     const body = await api.history(convId, limit);
@@ -312,7 +305,7 @@ async function startChat(flags) {
         out(paint(color, 'gray', `──── ${d} ────`));
         day = d;
       }
-      out(formatMessage(m, { bots: state.bots, color, imageUrl: (name) => api.imageUrl(name) }));
+      printMessage(m);
     }
     latest = Math.max(latest, body.latest || 0);
     if (body.latest) api.read(convId, body.latest).catch(() => {});
@@ -336,21 +329,20 @@ async function startChat(flags) {
   function onMessage(m) {
     latest = Math.max(latest, m.seq || 0);
     typing(false);
-    if (own.has(m.seq)) {
-      own.delete(m.seq);
-      return;
-    }
+    if (displayed.has(m.seq)) return;
+    displayed.add(m.seq);
+    if (displayed.size > 1000) displayed.delete(displayed.values().next().value);
     if (m.conv !== convId) {
       if (m.from !== 'user') {
         out(paint(color, 'gray', `· ${convTitle(m.conv)} 有新消息(${oneLine(m.text, 40) || '图片'}),/to 切过去`));
       }
       return;
     }
-    out(formatMessage(m, { bots: state.bots, color, imageUrl: (name) => api.imageUrl(name) }));
+    printMessage(m);
     if (typeof m.seq === 'number') api.read(convId, m.seq).catch(() => {});
   }
 
-  const streamTask = api
+  streamTask = api
     .stream({
       after: latest,
       device: settings.device,
@@ -373,7 +365,7 @@ async function startChat(flags) {
     })
     .catch((err) => {
       if (ctl.signal.aborted) return;
-      fail(err instanceof AuthError ? '登录态已失效,重新运行 sidekick login' : `推流出错:${err.message}`);
+      out(err instanceof AuthError ? '登录态已失效,重新运行 sidekick login' : `推流出错:${err.message}`);
       shutdown(1);
     });
 
@@ -436,7 +428,7 @@ async function startChat(flags) {
         );
         return;
       case 'clear':
-        if (vt) process.stdout.write('\u001b[2J\u001b[H');
+        if (ui) ui.clear();
         else out('(清屏已跳过:纯文本模式下不动终端)');
         return;
       default:
@@ -457,41 +449,39 @@ async function startChat(flags) {
       out(paint(color, 'red', err instanceof Error ? err.message : String(err)));
     } finally {
       busy = false;
-      reprompt();
       void drain();
     }
   }
 
   async function sendText(text) {
     const res = await api.send({ conv: convId, text, device: settings.device });
-    own.add(res.seq);
-    if (own.size > 500) own.clear();
     latest = Math.max(latest, res.seq);
-    out(formatMessage({ seq: res.seq, conv: convId, ts: Date.now(), from: 'user', text }, { bots: state.bots, color }));
+    if (displayed.has(res.seq)) return;
+    displayed.add(res.seq);
+    printMessage({ seq: res.seq, conv: convId, ts: Date.now(), from: 'user', text });
   }
 
-  rl = createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
-  rl.setPrompt(paint(color, 'green', '你 › '));
-  // 管道/日志里不写提示符,免得跟正文捣在一起。
-  if (vt) rl.prompt();
-  rl.on('line', (line) => {
-    const text = line.trim();
-    if (!text) {
-      reprompt();
-      return;
-    }
-    queue.push(() => (text.startsWith('/') ? handleSlash(text) : sendText(text)));
-    void drain();
-  });
-  rl.on('SIGINT', () => shutdown(0));
-  rl.on('close', () => {
-    if (!closed) shutdown(0);
-  });
+  if (ui) {
+    ui.start();
+  } else {
+    rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+    rl.on('line', (line) => {
+      const text = line.trim();
+      if (!text) return;
+      queue.push(() => (text.startsWith('/') ? handleSlash(text) : sendText(text)));
+      void drain();
+    });
+    rl.on('SIGINT', () => shutdown(0));
+    rl.on('close', () => {
+      if (!closed) shutdown(0);
+    });
+  }
 
   function shutdown(code = 0) {
     if (closed) return;
     closed = true;
     typing(false);
+    ui?.stop();
     ctl.abort();
     try {
       rl?.close();
