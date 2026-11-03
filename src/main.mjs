@@ -58,6 +58,7 @@ const HELP = `Sidekick 终端客户端 ${PACKAGE_VERSION}
   --wait <秒>       一次性模式:收到第一条后再等多久算说完,默认 6
   --json            一次性模式:每条消息输出一行 JSON
   --no-color        不上色
+  --plain           纯文本:不上色、不重画输入行(老终端/管道/日志里用)
   -h, --help        这份说明
   -v, --version     版本
 
@@ -90,6 +91,10 @@ function parseFlags(argv) {
     }
     if (arg === '--no-color') {
       flags.noColor = true;
+      continue;
+    }
+    if (arg === '--plain') {
+      flags.plain = true;
       continue;
     }
     if (arg.startsWith('--')) {
@@ -257,7 +262,9 @@ async function startChat(flags) {
     }
   }
 
-  const color = flags.noColor ? false : colorsEnabled();
+  // 老终端(不认 ANSI)和管道里别用转义序列:重画输入行会留下「[K」这类垃圾。
+  const vt = Boolean(process.stdout.isTTY) && !flags.plain && process.env.SIDEKICK_PLAIN !== '1';
+  const color = flags.noColor || !vt ? false : colorsEnabled();
   const convTitle = (id) => state.conversations.find((c) => c.id === id)?.title || id;
   const convOf = (id) => state.conversations.find((c) => c.id === id);
   let convId = pickConv(state, settings.conv);
@@ -286,7 +293,7 @@ async function startChat(flags) {
 
   let typingShown = false;
   const typing = (on) => {
-    if (!process.stderr.isTTY) return;
+    if (!vt || !process.stderr.isTTY) return;
     if (on && !typingShown) {
       process.stderr.write(paint(color, 'gray', '… 正在输入'));
       typingShown = true;
