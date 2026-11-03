@@ -276,7 +276,7 @@ async function startChat(flags) {
   let closed = false;
 
   const out = (text) => {
-    if (!rl || closed) {
+    if (!rl || closed || !vt) {
       process.stdout.write(`${text}\n`);
       return;
     }
@@ -436,7 +436,8 @@ async function startChat(flags) {
         );
         return;
       case 'clear':
-        process.stdout.write('\u001b[2J\u001b[H');
+        if (vt) process.stdout.write('\u001b[2J\u001b[H');
+        else out('(清屏已跳过:纯文本模式下不动终端)');
         return;
       default:
         out(paint(color, 'red', `不认识的命令:/${cmd}(/help 看命令)`));
@@ -471,7 +472,8 @@ async function startChat(flags) {
 
   rl = createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
   rl.setPrompt(paint(color, 'green', '你 › '));
-  rl.prompt();
+  // 管道/日志里不写提示符,免得跟正文捣在一起。
+  if (vt) rl.prompt();
   rl.on('line', (line) => {
     const text = line.trim();
     if (!text) {
