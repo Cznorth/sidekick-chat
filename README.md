@@ -42,7 +42,7 @@ Enter 发送，Shift+Enter 换行（终端需支持；也可用 Ctrl+J），↑/
 
 复制图片后按 **Ctrl+V** 或输入 **`/paste`**，图片会进入待发送区；可继续输入说明，按 Enter 一起发送。终端如果拦截 Ctrl+V（复制图片时通常不会向程序发出字符），请用 `/paste`。文字仍可用终端的 Ctrl+Shift+V / 右键粘贴。也可以 `/image "D:\图片\截图.png"` 添加文件。每条最多 4 张、每张 6 MB，支持 PNG/JPEG/GIF/WebP；`/drop` 清除待发送图片，`/send [说明]` 发送（纯文本模式用这个命令）。发送失败保留图片，切换会话前须发送或清除。
 
-Windows 使用系统剪贴板，无需另装工具；macOS 需安装 `pngpaste`，Linux 使用 `wl-clipboard`（Wayland）或 `xclip`（X11）。剪贴板读取发生在运行 CLI 的机器上，SSH 会话可改用 `/image` 读取远端文件。
+Windows 使用系统剪贴板，无需另装工具；**WSL 里直接读 Windows 的剪贴板**（经 `powershell.exe`，截图、复制的图片都在那边），`/image` 也认 `D:\图片\a.png` 这样的 Windows 路径；macOS 需安装 `pngpaste`，其他 Linux 使用 `wl-clipboard`（Wayland）或 `xclip`（X11）。剪贴板读取发生在运行 CLI 的机器上，SSH 会话可改用 `/image` 读取远端文件。
 
 老终端可用 `sidekick --plain`：不上色、不重画输入行。管道和 `TERM=dumb` 自动使用纯文本；`--no-color` / `NO_COLOR` 只关闭颜色。一次性 `ask` 和 `--json` 保持文本/JSON 输出。
 
