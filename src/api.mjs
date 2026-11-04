@@ -92,8 +92,8 @@ export class SidekickApi {
     return this.request('GET', `v1/team/history?conv=${encodeURIComponent(conv)}&limit=${limit}`);
   }
 
-  send({ conv, text, device }) {
-    return this.request('POST', 'v1/team/send', { conv, text, device });
+  send({ conv, text, device, images }) {
+    return this.request('POST', 'v1/team/send', { conv, text, device, images });
   }
 
   read(conv, seq) {

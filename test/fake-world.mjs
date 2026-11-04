@@ -65,7 +65,8 @@ export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botN
       req.on('end', () => {
         const body = JSON.parse(raw || '{}');
         seq += 1;
-        const sent = { seq, conv: body.conv, ts: Date.now(), from: 'user', text: body.text, device: body.device };
+        const images = body.images?.map((_, i) => `test-image-${i}.png`);
+        const sent = { seq, conv: body.conv, ts: Date.now(), from: 'user', text: body.text, device: body.device, images, uploads: body.images };
         push(sent);
         // 模拟秘书:隔一拍回一句。
         setTimeout(() => {
@@ -73,7 +74,7 @@ export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botN
           push({ seq, conv: body.conv, ts: Date.now(), from: primary, text: `收到:${body.text}`, model: 'codex/gpt-5.5' });
         }, 30);
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ seq: sent.seq, conv: sent.conv }));
+        res.end(JSON.stringify({ seq: sent.seq, conv: sent.conv, images }));
       });
       return;
     }

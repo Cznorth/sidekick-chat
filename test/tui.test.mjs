@@ -30,6 +30,29 @@ class Terminal {
   }
 }
 
+test('image paste shortcut preserves text and allows image-only submission', async () => {
+  const terminal = new Terminal();
+  const sent = [];
+  let count = 0;
+  const ui = createChatUI({ color: false, terminal, onSubmit: (text) => sent.push(text), onQuit() {},
+    hasImages: () => count > 0, onPasteImage: () => { count++; ui.attachments(count); } });
+  ui.start();
+  try {
+    terminal.input('看看');
+    terminal.input('\u0016');
+    await terminal.flush();
+    assert.match(terminal.text(), /待发送图片 1\/4/);
+    terminal.input('\r');
+    assert.deepEqual(sent, ['看看']);
+    terminal.input('\r');
+    assert.deepEqual(sent, ['看看', '']);
+  } finally {
+    ui.stop();
+    await terminal.flush();
+    terminal.screen.dispose();
+  }
+});
+
 test('stream snapshots update in place, finalize once, and preserve the input cursor', async () => {
   const terminal = new Terminal();
   const sent = [];

@@ -1,4 +1,4 @@
-import { Container, Editor, Markdown, ProcessTerminal, Text, TuiMainScreen } from '@earendil-works/pi-tui';
+import { Container, Editor, Markdown, ProcessTerminal, Text, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
 import { paint, formatMessage } from './format.mjs';
 
 export function markdownTheme(color) {
@@ -12,7 +12,7 @@ export function markdownTheme(color) {
 }
 
 /** Pi's renderer owns every screen write, including the editor and busy status. */
-export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTerminal() }) {
+export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, hasImages = () => false, terminal = new ProcessTerminal() }) {
   const tui = new TuiMainScreen(terminal);
   const transcript = new Container();
   const live = new Container();
@@ -33,16 +33,24 @@ export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTe
   tui.addChild(live);
   tui.addChild(status);
   tui.addChild(editor);
-  tui.addChild(new Text(paint(color, 'gray', 'Enter 发送 · Shift+Enter 换行 · ↑ 历史 · /help · Ctrl+C 退出'), 1, 0));
+  const attachments = new Text('', 1, 0);
+  tui.addChild(attachments);
+  tui.addChild(new Text(paint(color, 'gray', 'Enter 发送 · Ctrl+V 图片 · /paste · /image 路径 · /help · Ctrl+C 退出'), 1, 0));
   tui.setFocus(editor);
   tui.addInputListener((data) => {
+    // 任何一个按键都算「人在终端前面」:调用方据此决定要不要把新消息标成已读。
+    onInput?.(data);
+    if (matchesKey(data, 'ctrl+v') && onPasteImage) {
+      onPasteImage();
+      return { consume: true };
+    }
     if (data === '\u0003' || data === '\u0004' && !editor.getText()) {
       onQuit();
       return { consume: true };
     }
   });
   editor.onSubmit = (text) => {
-    if (!text.trim()) return;
+    if (!text.trim() && !hasImages()) return;
     editor.addToHistory(text);
     editor.setText('');
     onSubmit(text.trim());
@@ -51,6 +59,7 @@ export function createChatUI({ color, onSubmit, onQuit, terminal = new ProcessTe
   return {
     start: () => tui.start(),
     stop: () => tui.stop(),
+    attachments(count) { attachments.setText(count ? `待发送图片 ${count}/4 · Enter 发送 · /drop 清除` : ''); tui.requestRender(); },
     out(text) { transcript.addChild(new Text(text, 1, 0)); tui.requestRender(); },
     message(message, options) {
       if (message.draft) dropDraft(draftKey({ from: message.from, id: message.draft }));

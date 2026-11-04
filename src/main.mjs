@@ -29,6 +29,7 @@ import {
 } from './format.mjs';
 import { ask, askPassword } from './prompt.mjs';
 import { createQuotaReader, formatQuota } from './quota.mjs';
+import { clipboardImage, imageFile } from './images.mjs';
 
 const PACKAGE_VERSION = (() => {
   try {
@@ -271,6 +272,12 @@ async function startChat(flags) {
   let convId = pickConv(state, settings.conv);
   let latest = state.latest || 0;
   let everConnected = false;
+  // 「有人在看」才推进已读:调试时终端可以一直挂在那儿,而挂着的终端不该把手机上刚弹出的通知顶掉。
+  // 有按键才算在场(120 秒内),不在场时只把进度攒在 seenSeq 里,等下次动手再一起报。
+  const PRESENT_MS = 120_000;
+  // 0 = 启动以来还没人碰过这台终端:刚起来的窗口也不算在场,只靠 printHistory 那个显式动作推一次。
+  let lastInputAt = 0;
+  let seenSeq = 0;
   const displayed = new Set();
   const ctl = new AbortController();
   let rl = null;
@@ -278,12 +285,35 @@ async function startChat(flags) {
   let ui = null;
   let streamTask = Promise.resolve();
   const quotas = createQuotaReader(settings);
+  let pendingImages = [];
+  function addImage(image) {
+    if (pendingImages.length >= 4) throw new Error('每条消息最多 4 张图片，先发送或 /drop 清除');
+    pendingImages.push(image);
+    ui?.attachments(pendingImages.length);
+    if (!ui) out(`待发送图片 ${pendingImages.length}/4；/send 发送，/drop 清除`);
+  }
 
   const out = (text) => {
     if (ui) ui.out(text);
     else process.stdout.write(`${text}\n`);
   };
   const typing = (on) => ui?.typing(on);
+
+  /** 把「已经打到屏幕上」的最新 seq 报成已读。 */
+  function reportSeen() {
+    if (!seenSeq) return;
+    const seq = seenSeq;
+    seenSeq = 0;
+    api.read(convId, seq).catch(() => {});
+  }
+
+  /** 用户在这台终端上动了一下(敲键、发消息、切会话):算在场,并把攒着的已读补报上去。 */
+  function markPresent() {
+    lastInputAt = Date.now();
+    reportSeen();
+  }
+
+  const present = () => lastInputAt > 0 && Date.now() - lastInputAt < PRESENT_MS;
 
   const printMessage = (message) => {
     const options = { bots: state.bots, color, imageUrl: (name) => api.imageUrl(name) };
@@ -292,7 +322,10 @@ async function startChat(flags) {
   };
   if (vt) {
     const { createChatUI } = await import('./tui.mjs');
-    ui = createChatUI({ color, onSubmit: (text) => {
+    ui = createChatUI({ color, hasImages: () => pendingImages.length > 0,
+      onPasteImage: () => { queue.push(async () => addImage(await clipboardImage())); void drain(); },
+      onInput: () => markPresent(), onSubmit: (text) => {
+      markPresent();
       queue.push(() => text.startsWith('/') ? handleSlash(text) : sendText(text));
       void drain();
     }, onQuit: () => shutdown(0) });
@@ -310,6 +343,8 @@ async function startChat(flags) {
       printMessage(m);
     }
     latest = Math.max(latest, body.latest || 0);
+    // 刚把这段历史打到屏幕上(启动、切会话、/history),已读位置就到这里。
+    seenSeq = 0;
     if (body.latest) api.read(convId, body.latest).catch(() => {});
     if (body.messages.length === 0) out(paint(color, 'gray', '(这里还没有消息)'));
   }
@@ -344,7 +379,10 @@ async function startChat(flags) {
       return;
     }
     printMessage(m);
-    if (typeof m.seq === 'number') api.read(convId, m.seq).catch(() => {});
+    if (typeof m.seq === 'number') {
+      if (present()) api.read(convId, m.seq).catch(() => {});
+      else seenSeq = Math.max(seenSeq, m.seq);
+    }
   }
 
   streamTask = api
@@ -381,7 +419,9 @@ async function startChat(flags) {
     });
 
   function switchConv(next) {
+    if (pendingImages.length) throw new Error('还有待发送图片，请先发送或 /drop 清除再切换会话');
     ui?.clearDrafts();
+    markPresent();
     convId = next;
     const cfg = { ...readConfig(), url: settings.url, conv: convId, device: settings.device };
     writeConfig(cfg);
@@ -394,6 +434,21 @@ async function startChat(flags) {
     const cmd = (raw || '').toLowerCase();
     const arg = rest.join(' ');
     switch (cmd) {
+      case 'paste':
+        addImage(await clipboardImage());
+        return;
+      case 'image':
+        if (!arg) throw new Error('用法：/image 图片路径');
+        addImage(await imageFile(arg));
+        return;
+      case 'drop':
+        pendingImages = [];
+        ui?.attachments(0);
+        out('已清除待发送图片');
+        return;
+      case 'send':
+        await sendText(arg);
+        return;
       case 'help':
       case '?':
         out([
@@ -402,6 +457,10 @@ async function startChat(flags) {
           '/history [n]     重印最近 n 条(默认 20)',
           '/who             名册和连接状态',
           '/usage           查询额度，查看剩余比例和重置时间',
+          '/paste           添加剪贴板图片（也可 Ctrl+V）',
+          '/image <路径>    添加图片文件，最多 4 张、每张 6 MB',
+          '/send [文字]     发送待发送图片；也可直接输入文字或回车',
+          '/drop            清除待发送图片',
           '/clear           清屏',
           '/quit            退出(也可以 Ctrl-C)',
           '直接输入文字就是发给当前会话。',
@@ -471,11 +530,14 @@ async function startChat(flags) {
   }
 
   async function sendText(text) {
-    const res = await api.send({ conv: convId, text, device: settings.device });
+    const images = pendingImages.slice();
+    const res = await api.send({ conv: convId, text, device: settings.device, ...(images.length ? { images } : {}) });
+    pendingImages = [];
+    ui?.attachments(0);
     latest = Math.max(latest, res.seq);
     if (displayed.has(res.seq)) return;
     displayed.add(res.seq);
-    printMessage({ seq: res.seq, conv: convId, ts: Date.now(), from: 'user', text });
+    printMessage({ seq: res.seq, conv: convId, ts: Date.now(), from: 'user', text, images: res.images });
   }
 
   if (ui) {
@@ -485,6 +547,7 @@ async function startChat(flags) {
     rl.on('line', (line) => {
       const text = line.trim();
       if (!text) return;
+      markPresent();
       queue.push(() => (text.startsWith('/') ? handleSlash(text) : sendText(text)));
       void drain();
     });
@@ -497,6 +560,7 @@ async function startChat(flags) {
   function shutdown(code = 0) {
     if (closed) return;
     closed = true;
+    reportSeen();
     typing(false);
     quotas.stop();
     ui?.stop();

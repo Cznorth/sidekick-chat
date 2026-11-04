@@ -3,7 +3,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -16,6 +16,34 @@ const run = promisify(execFile);
 const BIN = fileURLToPath(new URL('../bin/sidekick.mjs', import.meta.url));
 const tmp = mkdtempSync(join(tmpdir(), 'sidekick-cli-'));
 const CONFIG = join(tmp, 'config.json');
+
+test('plain CLI attaches a quoted image path and sends image-only payload', async () => {
+  const world = await startFakeWorld();
+  const path = join(tmp, 'screen shot.png');
+  const png = Buffer.from([137,80,78,71,13,10,26,10,0]);
+  writeFileSync(path, png);
+  try {
+    const output = await new Promise((resolve, reject) => {
+      let started = false;
+      let quitting = false;
+      let text = '';
+      const child = execFile(process.execPath, [BIN, '--plain'], {
+        env: { ...process.env, SIDEKICK_URL: world.url, SIDEKICK_TOKEN: world.token, SIDEKICK_CONFIG: CONFIG }, timeout: 8000,
+      }, (err, stdout) => err ? reject(err) : resolve(stdout));
+      child.stdout.on('data', (chunk) => {
+        text += chunk;
+        if (!started && text.includes('会话:')) { started = true; child.stdin.write(`/image "${path}"\n/send\n`); }
+        if (!quitting && text.includes('收到:')) { quitting = true; child.stdin.write('/quit\n'); }
+      });
+    });
+    assert.match(output, /待发送图片 1\/4/);
+    const api = new SidekickApi({ url: world.url, token: world.token });
+    const message = (await api.history('dm:sidekick')).messages.find((m) => m.from === 'user');
+    assert.equal(message.text, '');
+    assert.deepEqual(message.uploads, [{ mime: 'image/png', data: png.toString('base64') }]);
+    assert.match(output, /test-image-0.png/);
+  } finally { await world.close(); }
+});
 
 test.after(() => rmSync(tmp, { recursive: true, force: true }));
 
