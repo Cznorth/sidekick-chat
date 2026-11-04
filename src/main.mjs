@@ -30,6 +30,7 @@ import {
 import { ask, askPassword } from './prompt.mjs';
 import { createQuotaReader, formatQuota } from './quota.mjs';
 import { clipboardImage, imageFile } from './images.mjs';
+import { formatActivity, applyActivity } from './activity.mjs';
 
 const PACKAGE_VERSION = (() => {
   try {
@@ -331,6 +332,13 @@ async function startChat(flags) {
     }, onQuit: () => shutdown(0) });
   }
 
+  function drawActivity() {
+    const members = convOf(convId)?.members || [];
+    const text = state.bots.filter(b => members.includes(b.id)).map(b => `${b.name}: ${formatActivity(b)}`).join('\n');
+    if (ui) ui.activity(text);
+    else if (text) out(text);
+  }
+
   async function printHistory(limit = 20) {
     const body = await api.history(convId, limit);
     let day = '';
@@ -356,6 +364,7 @@ async function startChat(flags) {
   }
   out(paint(color, 'gray', `会话:${convTitle(convId)} · /help 看命令,/conv 列会话,Ctrl-C 退出`));
   await printHistory(30);
+  drawActivity();
 
   function applyState(next) {
     if (!next) return;
@@ -364,6 +373,7 @@ async function startChat(flags) {
       ui?.clearDrafts();
       convId = pickConv(state, '');
     }
+    drawActivity();
   }
 
   function onMessage(m) {
@@ -409,6 +419,9 @@ async function startChat(flags) {
           if (payload.end || payload.conv === convId) ui.draft(payload, { bots: state.bots, color });
           else ui.draft({ ...payload, end: true }, { bots: state.bots, color });
         }
+        else if (event === 'activity' && applyActivity(state.bots, payload)) {
+          if (convOf(convId)?.members.includes(payload.bot)) drawActivity();
+        }
         else if (event === 'busy') typing(Boolean(payload.busy));
       },
     })
@@ -423,6 +436,7 @@ async function startChat(flags) {
     ui?.clearDrafts();
     markPresent();
     convId = next;
+    drawActivity();
     const cfg = { ...readConfig(), url: settings.url, conv: convId, device: settings.device };
     writeConfig(cfg);
     out(paint(color, 'green', `→ ${convTitle(convId)}`));
@@ -476,7 +490,7 @@ async function startChat(flags) {
       case 'ls':
         out(
           state.conversations
-            .map((c, i) => formatConversation(c, i + 1, { bots: state.bots, current: convId }))
+            .map((c, i) => formatConversation(c, i + 1, { bots: state.bots, current: convId }) + '\n' + c.members.map(id => state.bots.find(b => b.id === id)).filter(Boolean).map(b => `    ${b.name}: ${formatActivity(b)}`).join('\n'))
             .join('\n') || '(还没有会话)',
         );
         return;
@@ -495,7 +509,7 @@ async function startChat(flags) {
       case 'who':
         out(
           state.bots
-            .map((b) => `${b.primary ? '*' : ' '}${b.name}(${b.id}) ${b.status}${b.busy ? ' 正在忙' : ''} — ${b.role || '无专长'}`)
+            .map((b) => `${b.primary ? '*' : ' '}${b.name}(${b.id}) ${b.status}${b.busy ? ' 正在忙' : ''} — ${b.role || '无专长'}\n    ${formatActivity(b)}`)
             .join('\n'),
         );
         return;

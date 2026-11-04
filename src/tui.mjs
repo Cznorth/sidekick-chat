@@ -23,6 +23,7 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, h
     if (draft) live.removeChild(draft.container);
     drafts.delete(key);
   };
+  const activity = new Text('', 1, 0);
   const status = new Text('', 1, 0);
   const identity = (text) => text;
   const editor = new Editor(tui, {
@@ -31,6 +32,7 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, h
   });
   tui.addChild(transcript);
   tui.addChild(live);
+  tui.addChild(activity);
   tui.addChild(status);
   tui.addChild(editor);
   const attachments = new Text('', 1, 0);
@@ -91,6 +93,7 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, h
       tui.requestRender();
     },
     clearDrafts() { drafts.clear(); live.clear(); tui.requestRender(); },
+    activity(text) { activity.setText(paint(color, 'gray', text)); tui.requestRender(); },
     typing(on) { status.setText(on ? paint(color, 'gray', '… 正在输入') : ''); tui.requestRender(); },
     clear() { transcript.clear(); drafts.clear(); live.clear(); tui.requestRender(true); },
   };

@@ -212,3 +212,30 @@ test('/usage is a local command in plain mode and shows all four quota sources',
     assert.equal((await api.history('dm:sidekick')).messages.length, 0);
   } finally { await world.close(); }
 });
+
+
+test('plain CLI renders live activity and exposes it in /who and /conv', async () => {
+  const world = await startFakeWorld();
+  try {
+    const output = await new Promise((resolve, reject) => {
+      let text = ''; let emitted = false; let queried = false;
+      const child = execFile(process.execPath, [BIN, '--plain'], {
+        env: { ...process.env, SIDEKICK_URL: world.url, SIDEKICK_TOKEN: world.token, SIDEKICK_CONFIG: CONFIG }, timeout: 8000,
+      }, (err, stdout) => err ? reject(err) : resolve(stdout));
+      child.stdout.on('data', chunk => {
+        text += chunk;
+        if (!emitted && text.includes('尚无 LLM 活动记录')) {
+          emitted = true;
+          // 等 hello 到达后再推,模拟活跃会话内的更新。
+          setTimeout(() => world.emit('activity', { bot: 'sidekick', at: Date.now(), text: '活动更新测试' }), 100);
+        }
+        if (!queried && text.includes('活动更新测试')) {
+          queried = true; child.stdin.write('/who\n/conv\n/quit\n');
+        }
+      });
+    });
+    assert.match(output, /秘书: 最后活跃/);
+    assert.ok(output.split('活动更新测试').length - 1 >= 3);
+    assert.ok(!output.includes('\u001b'));
+  } finally { await world.close(); }
+});

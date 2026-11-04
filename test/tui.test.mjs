@@ -160,3 +160,27 @@ test('bracketed multiline paste submits as one message and clear preserves the d
     terminal.screen.dispose();
   }
 });
+
+
+test('activity remains visible through busy changes and preserves typed text', async () => {
+  const terminal = new Terminal();
+  const sent = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit: t => sent.push(t), onQuit() {} });
+  ui.start();
+  try {
+    terminal.input('还没发');
+    ui.activity('秘书: 最后活跃 14:28 · 事项提醒');
+    ui.typing(true);
+    await terminal.flush();
+    assert.match(terminal.text(), /事项提醒/);
+    ui.typing(false);
+    ui.activity('秘书: 最后活跃 14:29 · 回你的消息');
+    await terminal.flush();
+    assert.match(terminal.text(), /回你的消息/);
+    assert.ok(!terminal.text().includes('事项提醒'));
+    terminal.input('完'); terminal.input('\r');
+    assert.deepEqual(sent, ['还没发完']);
+  } finally {
+    ui.stop(); await terminal.flush(); terminal.screen.dispose();
+  }
+});

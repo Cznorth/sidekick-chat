@@ -103,6 +103,7 @@ export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botN
     url: `http://127.0.0.1:${port}`,
     token,
     state,
+    emit: (event, data) => { for (const res of streams) res.write(sseFrame(event, data)); },
     close: () =>
       new Promise((resolve) => {
         for (const res of streams) res.end();

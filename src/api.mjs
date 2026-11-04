@@ -106,7 +106,7 @@ export class SidekickApi {
 
   /**
    * 订阅推流,断了按退避重连,重连时带上最后的 seq 把漏掉的补齐。
-   * `onEvent(event, payload)` 收到 hello / state / message / draft / thinking / busy / read。
+   * `onEvent(event, payload)` 收到 hello / state / message / draft / thinking / busy / activity / read。
    * 返回的 promise 只在 abort 时结束。
    */
   async stream({ after = 0, device, signal, onEvent, onStatus }) {
