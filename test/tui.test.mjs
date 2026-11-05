@@ -162,7 +162,7 @@ test('bracketed multiline paste submits as one message and clear preserves the d
 });
 
 
-test('activity remains visible through busy changes and preserves typed text', async () => {
+test('HUD stays below the editor without a shortcut footer and preserves typed text', async () => {
   const terminal = new Terminal();
   const sent = [];
   const ui = createChatUI({ color: false, terminal, onSubmit: t => sent.push(t), onQuit() {} });
@@ -174,12 +174,17 @@ test('activity remains visible through busy changes and preserves typed text', a
     await terminal.flush();
     assert.match(terminal.text(), /事项提醒/);
     assert.match(terminal.text(), /68,000 \/ 200,000/);
+    const screen = terminal.text();
+    assert.ok(screen.indexOf('还没发') < screen.indexOf('最后活跃'));
+    assert.ok(screen.indexOf('还没发') < screen.indexOf('正在输入'));
+    assert.ok(!screen.includes('Ctrl+C 退出'));
     ui.typing(false);
     ui.activity('秘书: 最后活跃 14:29 · 回你的消息\n上下文 ≈ 1,000 / 200,000 token · 1%');
     await terminal.flush();
     assert.match(terminal.text(), /回你的消息/);
     assert.match(terminal.text(), /1,000 \/ 200,000/);
     assert.ok(!terminal.text().includes('事项提醒'));
+    assert.ok(terminal.text().indexOf('还没发') < terminal.text().indexOf('最后活跃'));
     terminal.input('完'); terminal.input('\r');
     assert.deepEqual(sent, ['还没发完']);
   } finally {

@@ -32,12 +32,11 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, h
   });
   tui.addChild(transcript);
   tui.addChild(live);
+  tui.addChild(editor);
   tui.addChild(activity);
   tui.addChild(status);
-  tui.addChild(editor);
   const attachments = new Text('', 1, 0);
   tui.addChild(attachments);
-  tui.addChild(new Text(paint(color, 'gray', 'Enter 发送 · Ctrl+V 图片 · /paste · /image 路径 · /help · Ctrl+C 退出'), 1, 0));
   tui.setFocus(editor);
   tui.addInputListener((data) => {
     // 任何一个按键都算「人在终端前面」:调用方据此决定要不要把新消息标成已读。
