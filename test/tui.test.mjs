@@ -169,14 +169,16 @@ test('activity remains visible through busy changes and preserves typed text', a
   ui.start();
   try {
     terminal.input('还没发');
-    ui.activity('秘书: 最后活跃 14:28 · 事项提醒');
+    ui.activity('秘书: 最后活跃 14:28 · 事项提醒\n上下文 ≈ 68,000 / 200,000 token · 34%');
     ui.typing(true);
     await terminal.flush();
     assert.match(terminal.text(), /事项提醒/);
+    assert.match(terminal.text(), /68,000 \/ 200,000/);
     ui.typing(false);
-    ui.activity('秘书: 最后活跃 14:29 · 回你的消息');
+    ui.activity('秘书: 最后活跃 14:29 · 回你的消息\n上下文 ≈ 1,000 / 200,000 token · 1%');
     await terminal.flush();
     assert.match(terminal.text(), /回你的消息/);
+    assert.match(terminal.text(), /1,000 \/ 200,000/);
     assert.ok(!terminal.text().includes('事项提醒'));
     terminal.input('完'); terminal.input('\r');
     assert.deepEqual(sent, ['还没发完']);

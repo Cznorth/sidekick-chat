@@ -10,14 +10,14 @@ export function sseFrame(event, data) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botName = '秘书' } = {}) {
+export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botName = '秘书', context } = {}) {
   const messages = [];
   const streams = new Set();
   let seq = 0;
 
   const state = () => ({
     primary,
-    bots: [{ id: primary, name: botName, role: '秘书', emoji: '🗂', primary: true, enabled: true, status: 'online', busy: false }],
+    bots: [{ id: primary, name: botName, role: '秘书', emoji: '🗂', primary: true, enabled: true, status: 'online', busy: false, ...(context ? { context } : {}) }],
     conversations: [
       {
         id: `dm:${primary}`,

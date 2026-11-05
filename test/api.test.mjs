@@ -180,6 +180,32 @@ test('interactive plain/pipe output has no escapes and prints an SSE echo only o
   }
 });
 
+test('plain CLI displays initial context and SSE changes without sending /context to the bot', async () => {
+  const world = await startFakeWorld({ context: { at: 1000, estTokens: 68000, maxTokens: 200000 } });
+  try {
+    const output = await new Promise((resolve, reject) => {
+      let text = '', updated = false, quitting = false;
+      const child = execFile(process.execPath, [BIN, '--plain'], {
+        env: { ...process.env, SIDEKICK_URL: world.url, SIDEKICK_TOKEN: world.token, SIDEKICK_CONFIG: CONFIG }, timeout: 8000,
+      }, (err, result) => err ? reject(err) : resolve(result));
+      child.stdout.on('data', chunk => {
+        text += chunk;
+        if (!updated && text.includes('68,000 / 200,000')) {
+          updated = true;
+          setTimeout(() => world.emit('context', { bot: 'sidekick', at: 2000, estTokens: 1000, maxTokens: 300000 }), 100);
+        }
+        if (!quitting && text.includes('1,000 / 300,000')) {
+          quitting = true;
+          child.stdin.write('/context\n/quit\n');
+        }
+      });
+    });
+    assert.match(output, /68,000 \/ 200,000 token · 34%/);
+    assert.match(output, /1,000 \/ 300,000/);
+    assert.equal((await world.state()).latest, 0);
+  } finally { await world.close(); }
+});
+
 test('没登录时交互模式给出明确提示,而不是崩栈', async () => {
   await run(process.execPath, [BIN, 'logout'], { env: { ...process.env, SIDEKICK_CONFIG: CONFIG } });
   const child = await run(process.execPath, [BIN, 'ask', '在吗'], {

@@ -2,9 +2,10 @@
  * 终端客户端的主流程:`sidekick` 进交互对话,`sidekick login` 存凭据,`sidekick ask "…"` 一次性问一句。
  *
  * 它只是 chat World 的又一个客户端,和手机 App、网页版共用同一份会话和未读,
- * 不新增任何后端接口(见 packages/world-chat/src/world.ts 的 `startHub`)。
+ * 上下文用量随团队状态和 SSE 推流提供(见 packages/world-chat/src/world.ts 的 `startHub`)。
  */
 import { createInterface } from 'node:readline';
+import { applyContext, formatContext } from './context.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { AuthError, SidekickApi, loginWithPassword } from './api.mjs';
@@ -334,7 +335,7 @@ async function startChat(flags) {
 
   function drawActivity() {
     const members = convOf(convId)?.members || [];
-    const text = state.bots.filter(b => members.includes(b.id)).map(b => `${b.name}: ${formatActivity(b)}`).join('\n');
+    const text = state.bots.filter(b => members.includes(b.id)).map(b => `${b.name}: ${formatActivity(b)}\n${b.name}: ${formatContext(b)}`).join('\n');
     if (ui) ui.activity(text);
     else if (text) out(text);
   }
@@ -422,6 +423,9 @@ async function startChat(flags) {
         else if (event === 'activity' && applyActivity(state.bots, payload)) {
           if (convOf(convId)?.members.includes(payload.bot)) drawActivity();
         }
+        else if (event === 'context' && applyContext(state.bots, payload)) {
+          if (convOf(convId)?.members.includes(payload.bot)) drawActivity();
+        }
         else if (event === 'busy') typing(Boolean(payload.busy));
       },
     })
@@ -469,7 +473,8 @@ async function startChat(flags) {
           '/conv            列出会话',
           '/to <序号|名字>  切换会话',
           '/history [n]     重印最近 n 条(默认 20)',
-          '/who             名册和连接状态',
+          '/who             名册、连接状态和上下文用量',
+          '/context         当前会话各助理的上下文用量和预算',
           '/usage           查询额度，查看剩余比例和重置时间',
           '/paste           添加剪贴板图片（也可 Ctrl+V）',
           '/image <路径>    添加图片文件，最多 4 张、每张 6 MB',
@@ -509,9 +514,12 @@ async function startChat(flags) {
       case 'who':
         out(
           state.bots
-            .map((b) => `${b.primary ? '*' : ' '}${b.name}(${b.id}) ${b.status}${b.busy ? ' 正在忙' : ''} — ${b.role || '无专长'}\n    ${formatActivity(b)}`)
+            .map((b) => `${b.primary ? '*' : ' '}${b.name}(${b.id}) ${b.status}${b.busy ? ' 正在忙' : ''} — ${b.role || '无专长'}\n    ${formatActivity(b)}\n    ${formatContext(b)}`)
             .join('\n'),
         );
+        return;
+      case 'context':
+        out(state.bots.filter(b => convOf(convId)?.members.includes(b.id)).map(b => `${b.name}: ${formatContext(b)}`).join('\n') || '当前会话没有助理');
         return;
       case 'usage':
       case 'quota':
