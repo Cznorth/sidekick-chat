@@ -5,6 +5,7 @@
  * `cortico_session` Cookie(和网页版同一个 `CORTICO_WEB_PASSWORD`)。接口本身见
  * packages/world-chat/src/world.ts 的 `startHub`。
  */
+import { randomUUID } from 'node:crypto';
 import { authOrigin } from './config.mjs';
 
 /** 鉴权没过:登录态失效或令牌不对,调用方据此提示重新登录。 */
@@ -12,6 +13,10 @@ export class AuthError extends Error {}
 
 /** 连不上(没拿到响应):只有这种错才换备用线路,4xx / 5xx 不换。 */
 export class NetworkError extends Error {}
+
+class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
@@ -76,9 +81,15 @@ export class SidekickApi {
         if (signal?.aborted) throw signal.reason;
         throw new NetworkError(networkHint(url, err));
       }
-      const data = await res.json().catch(() => ({}));
+      let data;
+      try { data = await res.json(); }
+      catch (err) {
+        if (signal?.aborted) throw signal.reason;
+        if (!res.ok) data = {};
+        else throw new NetworkError(networkHint(url, err));
+      }
       if (res.status === 401) throw new AuthError(data.error || '登录态已失效');
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new HttpError(res.status, data.error || `HTTP ${res.status}`);
       return data;
     });
   }
@@ -92,8 +103,20 @@ export class SidekickApi {
     return this.request('GET', `v1/team/history?conv=${encodeURIComponent(conv)}&limit=${limit}`);
   }
 
-  send({ conv, text, device, images }) {
-    return this.request('POST', 'v1/team/send', { conv, text, device, images });
+  async send({ conv, text, device, images }, { signal, onRetry } = {}) {
+    const body = { conv, text, device, images, client_id: randomUUID() };
+    let delay = 1000;
+    for (;;) {
+      signal?.throwIfAborted();
+      try { return await this.request('POST', 'v1/team/send', body, { signal }); }
+      catch (err) {
+        if (!(err instanceof NetworkError) && !(err instanceof HttpError && [408, 502, 503, 504].includes(err.status))) throw err;
+        onRetry?.(err);
+        signal?.throwIfAborted();
+        await sleep(delay, signal);
+        delay = Math.min(delay * 2, 10000);
+      }
+    }
   }
 
   read(conv, seq) {

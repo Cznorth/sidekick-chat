@@ -553,7 +553,17 @@ async function startChat(flags) {
 
   async function sendText(text) {
     const images = pendingImages.slice();
-    const res = await api.send({ conv: convId, text, device: settings.device, ...(images.length ? { images } : {}) });
+    let warned = false;
+    const res = await api.send({ conv: convId, text, device: settings.device, ...(images.length ? { images } : {}) }, {
+      signal: ctl.signal,
+      onRetry: () => {
+        if (!warned) out('消息尚未确认送达，已保留并自动重试，请勿重复发送（退出客户端会停止重试）。');
+        warned = true;
+      },
+    }).catch((err) => {
+      if (!closed) out(`未发送的消息：${text}`);
+      throw err;
+    });
     pendingImages = [];
     ui?.attachments(0);
     latest = Math.max(latest, res.seq);
@@ -570,6 +580,7 @@ async function startChat(flags) {
       const text = line.trim();
       if (!text) return;
       markPresent();
+      if (text === '/quit' || text === '/exit') { shutdown(0); return; }
       queue.push(() => (text.startsWith('/') ? handleSlash(text) : sendText(text)));
       void drain();
     });

@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { AuthError, SidekickApi } from '../src/api.mjs';
+import { AuthError, NetworkError, SidekickApi } from '../src/api.mjs';
 import { startFakeWorld } from './fake-world.mjs';
 
 const run = promisify(execFile);
@@ -264,4 +264,31 @@ test('plain CLI renders live activity and exposes it in /who and /conv', async (
     assert.ok(output.split('活动更新测试').length - 1 >= 3);
     assert.ok(!output.includes('\u001b'));
   } finally { await world.close(); }
+});
+
+test('send retries an unconfirmed message with the same id and payload', async () => {
+  const api = new SidekickApi({ url: 'http://localhost' });
+  const bodies = [];
+  api.request = async (_method, _path, body) => {
+    bodies.push(structuredClone(body));
+    if (bodies.length === 1) throw new NetworkError('timeout');
+    return { seq: 7 };
+  };
+  let warnings = 0;
+  const result = await api.send({ conv: 'dm:sidekick', text: 'keep me', device: 'test', images: [{ data: 'abc' }] }, { onRetry: () => warnings++ });
+  assert.equal(result.seq, 7);
+  assert.equal(warnings, 1);
+  assert.deepEqual(bodies[0], bodies[1]);
+  assert.ok(bodies[0].client_id);
+});
+
+test('send stops retrying on cancellation and never retries auth failures', async () => {
+  const api = new SidekickApi({ url: 'http://localhost' });
+  const ctl = new AbortController();
+  api.request = async () => { throw new NetworkError('offline'); };
+  await assert.rejects(api.send({ text: 'x' }, { signal: ctl.signal, onRetry: () => ctl.abort() }));
+  let calls = 0;
+  api.request = async () => { calls++; throw new AuthError('expired'); };
+  await assert.rejects(api.send({ text: 'x' }), AuthError);
+  assert.equal(calls, 1);
 });
