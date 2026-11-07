@@ -61,7 +61,7 @@ test('主线路连不上时自动换备用线路', async () => {
   const world = await startFakeWorld();
   try {
     // 1 号端口不会有人监听:模拟国内直连 TLS 被掐的情况。
-    const api = new SidekickApi({ url: 'http://127.0.0.1:1', alt: world.url, token: world.token });
+    const api = new SidekickApi({ url: 'http://127.0.0.1:1', alts: [world.url], token: world.token });
     const state = await api.state();
     assert.equal(state.primary, 'sidekick');
     assert.equal(api.base, world.url);
@@ -70,10 +70,42 @@ test('主线路连不上时自动换备用线路', async () => {
   }
 });
 
+test('前两条线路都不通时换到第三条', async () => {
+  const world = await startFakeWorld();
+  try {
+    const api = new SidekickApi({
+      url: 'http://127.0.0.1:1',
+      alts: ['http://127.0.0.1:2', world.url],
+      token: world.token,
+    });
+    const state = await api.state();
+    assert.equal(state.primary, 'sidekick');
+    assert.equal(api.base, world.url);
+  } finally {
+    await world.close();
+  }
+});
+
+test('备用线路换过去 5 分钟后先试回主线路', () => {
+  let now = 1_000_000;
+  const api = new SidekickApi({
+    url: 'https://primary.test/chat',
+    alts: ['https://us.test/chat', 'https://ali.test/chat'],
+    now: () => now,
+    primaryRetryMs: 5 * 60_000,
+  });
+  // 刚切到第一条备用线路:5 分钟内不回头撞主线路。
+  api.current = 'https://us.test/chat';
+  api.switchedAt = now;
+  assert.deepEqual(api.routeOrder(), ['https://us.test/chat', 'https://ali.test/chat', 'https://primary.test/chat']);
+  now += 5 * 60_000;
+  assert.deepEqual(api.routeOrder(), ['https://primary.test/chat', 'https://us.test/chat', 'https://ali.test/chat']);
+});
+
 test('备用线路不认网页登录时,提示改用令牌而不是报密码错', async () => {
   const world = await startFakeWorld();
   try {
-    const api = new SidekickApi({ url: 'http://127.0.0.1:1', alt: world.url, cookie: 'stale' });
+    const api = new SidekickApi({ url: 'http://127.0.0.1:1', alts: [world.url], cookie: 'stale' });
     await assert.rejects(
       () => api.state(),
       (err) => err instanceof AuthError && /--token/.test(err.message),

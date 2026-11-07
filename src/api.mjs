@@ -11,22 +11,36 @@ import { authOrigin } from './config.mjs';
 /** 鉴权没过:登录态失效或令牌不对,调用方据此提示重新登录。 */
 export class AuthError extends Error {}
 
-/** 连不上(没拿到响应):只有这种错才换备用线路,4xx / 5xx 不换。 */
+/** 连不上(没拿到响应):只有这种错才换备用线路,4xx 不换。 */
 export class NetworkError extends Error {}
 
-class HttpError extends Error {
+export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
+/** 网关错误通常是隧道断了、上游没起来,换一条线路可能就好了。 */
+function routeFailed(err) {
+  return err instanceof NetworkError || (err instanceof HttpError && [502, 503, 504].includes(err.status));
+}
+
 const REQUEST_TIMEOUT_MS = 20_000;
+/** 换到备用线路后,过这么久再试回主线路。 */
+const PRIMARY_RETRY_MS = 5 * 60_000;
 
 export class SidekickApi {
-  /** `alt` 是备用线路(如杭州 `http://47.96.64.66:18792`),只有主线路连不上才用。 */
-  constructor({ url, alt, token, cookie }) {
+  /**
+   * `alts` 是备用线路列表(美国直连、阿里→香港→美国),按顺序在连不上时换;
+   * `alt` 是旧版的单条写法,仍认。
+   */
+  constructor({ url, alt, alts, token, cookie, now = Date.now, primaryRetryMs = PRIMARY_RETRY_MS }) {
     this.primary = stripSlashes(String(url || ''));
-    this.alt = stripSlashes(String(alt || ''));
+    const list = Array.isArray(alts) ? alts : alts !== undefined ? [alts] : alt !== undefined ? [alt] : [];
+    this.alts = [...new Set(list.map((b) => stripSlashes(String(b || ''))).filter((b) => b && b !== this.primary))];
     /** 当前用着哪条:切到备用线路后就不再每次先撞一次主线路。 */
     this.current = this.primary;
+    this.switchedAt = 0;
+    this.now = now;
+    this.primaryRetryMs = primaryRetryMs;
     this.token = token || '';
     this.cookie = cookie || '';
   }
@@ -42,20 +56,32 @@ export class SidekickApi {
     return h;
   }
 
-  /** 先试当前线路,连不上再试备用线路(只有拿不到响应才算连不上)。 */
+  /**
+   * 当前线路优先;换到备用线路超过 5 分钟后,下一次请求先试回主线路。
+   * 返回的列表里不再包含已经试过的那条当前线路。
+   */
+  routeOrder() {
+    const all = [this.primary, ...this.alts].filter(Boolean);
+    if (this.current === this.primary) return all;
+    const backups = all.filter((b) => b !== this.primary);
+    if (this.now() - this.switchedAt >= this.primaryRetryMs) return [this.primary, ...backups];
+    // 还没到回头试主线路的时候:当前这条优先,其余备用在后面,主线路垫底。
+    return [this.current, ...backups.filter((b) => b !== this.current), this.primary];
+  }
+
+  /** 先试当前线路,连不上再按顺序试备用线路。4xx 是请求本身的问题,不换。 */
   async attempt(run) {
-    const bases = [this.current === this.alt ? this.primary : this.current];
-    if (this.alt && this.alt !== bases[0]) bases.push(this.alt);
     let last;
-    for (const base of bases) {
+    for (const base of this.routeOrder()) {
       try {
         const out = await run(base);
         this.current = base;
+        this.switchedAt = base === this.primary ? 0 : this.now();
         return out;
       } catch (err) {
-        if (!(err instanceof NetworkError)) {
+        if (!routeFailed(err)) {
           // 备用线路上没有网页登录接口:提示改用令牌,别让人以为密码错了。
-          if (err instanceof AuthError && base === this.alt && this.cookie) {
+          if (err instanceof AuthError && base !== this.primary && this.cookie) {
             throw new AuthError('备用线路不认网页登录,改成 sidekick login --token <设备令牌>');
           }
           throw err;

@@ -58,9 +58,18 @@ sidekick login --url http://47.96.64.66:18792 --token <设备令牌>   # 直连 
 ```
 
 - **网页密码**:就是网页版那个 `CORTICO_WEB_PASSWORD`。客户端拿它调站点的 `/api/auth/login`,
-  拿到 `cortico_session` Cookie 存起来,400 天不用重登。服务器地址默认 `https://hkv4.cznorth.cn/chat`。
+  拿到 `cortico_session` Cookie 存起来,400 天不用重登。服务器地址默认 `https://hkv4.cznorth.cn/chat`(香港)。
 - **设备令牌**:部署 `.env` 里的 `SIDEKICK_DEVICE_TOKEN`,和手机 App 用的是同一个。
-  适合备用线路(杭州 `47.96.64.66:18792`)这种没有网页登录接口的直连地址。
+  备用线路没有网页登录接口,要用令牌。
+
+默认线路顺序(主线路连不上或返回 502/503/504 才换,换过去 5 分钟后会先试回主线路):
+
+1. `https://hkv4.cznorth.cn/chat` — 香港主线路
+2. `https://kiro.ch66.top/sk-us/chat` — 美国直连(备用)
+3. `http://47.96.64.66:18792/chat` — 阿里云 frps → 香港 OpenResty → 美国(备用)
+
+用 `--url` 自己指定地址时不会自动加备用线路;要备用就再给 `--alt`(可重复,或逗号分隔),
+也可以写进 `~/.sidekick/config.json` 的 `alts` 数组。`SIDEKICK_ALT` / `SIDEKICK_ALTS` 环境变量同样认。
 
 `sidekick logout` 清掉本机登录态。Cookie 失效时会提示重新 `sidekick login`。
 
@@ -99,6 +108,7 @@ sidekick --device 家里的电脑 "…"   # 换一个署名(默认「终端」)
 | 变量 | 作用 |
 |---|---|
 | `SIDEKICK_URL` | 服务器地址,如 `https://hkv4.cznorth.cn/chat` |
+| `SIDEKICK_ALT` / `SIDEKICK_ALTS` | 备用线路,逗号分隔;主线路连不上时按顺序换 |
 | `SIDEKICK_TOKEN` | 设备令牌(Bearer) |
 | `SIDEKICK_PASSWORD` | 网页登录密码(只在 `sidekick login` 时用,不落盘) |
 | `SIDEKICK_COOKIE` | 直接给 `cortico_session` 的值 |
