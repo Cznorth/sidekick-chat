@@ -298,6 +298,26 @@ test('plain CLI renders live activity and exposes it in /who and /conv', async (
   } finally { await world.close(); }
 });
 
+test('watch receives live task output and does not send commands to chat', async () => {
+  const world = await startFakeWorld();
+  try {
+    const output = await new Promise((resolve, reject) => {
+      let started = false, done = false, text = '';
+      const child = execFile(process.execPath, [BIN, '--plain'], {
+        env: { ...process.env, SIDEKICK_URL: `${world.url}/chat`, SIDEKICK_TOKEN: world.token, SIDEKICK_CONFIG: CONFIG, SIDEKICK_ALTS: '' }, timeout: 9000,
+      }, (err, stdout) => err ? reject(err) : resolve(stdout));
+      child.stdout.on('data', chunk => {
+        text += chunk;
+        if (!started && text.includes('会话:')) { started = true; child.stdin.write('/watch T-42\n'); }
+        if (!done && text.includes('second')) { done = true; child.stdin.write('/watch off\n/quit\n'); }
+      });
+    });
+    assert.match(output, /T-42.*Codex/); assert.match(output, /echo hi/);
+    assert.match(output, /first/); assert.match(output, /second/);
+    assert.equal((await new SidekickApi({ url: world.url, token: world.token }).history('dm:sidekick')).messages.length, 0);
+  } finally { await world.close(); }
+});
+
 test('send retries an unconfirmed message with the same id and payload', async () => {
   const api = new SidekickApi({ url: 'http://localhost' });
   const bodies = [];

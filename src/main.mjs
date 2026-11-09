@@ -29,9 +29,10 @@ import {
   plainMessage,
 } from './format.mjs';
 import { ask, askPassword } from './prompt.mjs';
-import { createQuotaReader, formatQuota } from './quota.mjs';
+import { ccwebBase, createQuotaReader, formatQuota } from './quota.mjs';
 import { clipboardImage, imageFile } from './images.mjs';
 import { formatActivity, applyActivity } from './activity.mjs';
+import { formatWatch } from './watch.mjs';
 
 const PACKAGE_VERSION = (() => {
   try {
@@ -480,6 +481,7 @@ async function startChat(flags) {
           '/who             名册、连接状态和上下文用量',
           '/context         当前会话各助理的上下文用量和预算',
           '/usage           查询额度，查看剩余比例和重置时间',
+          '/watch <任务号>  查看执行器 · /watch expand 展开 · /watch off 关闭',
           '/paste           添加剪贴板图片（也可 Ctrl+V）',
           '/image <路径>    添加图片文件，最多 4 张、每张 6 MB',
           '/send [文字]     发送待发送图片；也可直接输入文字或回车',
@@ -529,6 +531,64 @@ async function startChat(flags) {
       case 'quota':
         out(formatQuota(await quotas.refresh(), { detail: true }));
         return;
+      case 'watch': {
+        if (arg === 'expand' || arg === 'collapse') {
+          watchExpanded = arg === 'expand';
+          if (watchSnapshot && ui) ui.watch(formatWatch(watchSnapshot, watchExpanded));
+          else if (!ui) out('纯文本模式持续打印动作与输出');
+          return;
+        }
+        watchGeneration++;
+        clearInterval(watchTimer);
+        watchTimer = null;
+        ui?.watch('');
+        if (!arg || arg === 'off') { watchSnapshot = null; ui?.watch(''); out('已关闭执行器观察'); return; }
+        const id = Number(arg.replace(/^T-/i, ''));
+        if (!Number.isSafeInteger(id) || id < 1) throw new Error('用法:/watch <任务号>');
+        const cc = new SidekickApi({ url: ccwebBase(settings.url), alts: (settings.alts || []).map(ccwebBase), token: settings.token, cookie: settings.cookie });
+        const generation = watchGeneration;
+        watchSnapshot = null;
+        let last = '';
+        const seen = new Map();
+        let inFlight = false;
+        const poll = async () => {
+          if (inFlight || closed) return;
+          inFlight = true;
+          try {
+            const { instance, session } = await cc.request('GET', `v1/agents/task?id=${id}`);
+            if (generation !== watchGeneration || closed) return;
+            if (!session) { if (ui) ui.watch(`● T-${id} · 暂无执行器会话`); else if (!last) out(`T-${id} 暂无执行器会话`); last = 'none'; return; }
+            watchSnapshot = { id, instance, session };
+            if (ui) { ui.watch(formatWatch(watchSnapshot, watchExpanded)); return; }
+            const heading = `● T-${id} · ${instance} · ${session.status}`;
+            if (heading !== last) { out(heading); last = heading; }
+            for (const m of session.messages || []) {
+              if (m.role === 'user') continue;
+              for (const [index, p] of (m.parts || []).entries()) {
+                const key = `${session.id}:${m.id}:${index}`;
+                const previous = seen.get(key);
+                const value = JSON.stringify(p);
+                if (previous?.value === value) continue;
+                if (p.type === 'tool') {
+                  const output = p.output || '';
+                  const delta = previous && output.startsWith(previous.output) ? output.slice(previous.output.length) : output;
+                  if (!previous || previous.status !== p.status || previous.title !== p.title) out(`  ⎿ ${p.tool || '工具'}${p.title ? ` · ${p.title}` : ''}${p.status ? ` (${p.status})` : ''}`);
+                  if (delta) out(`    ${delta}`);
+                  seen.set(key, { value, output, status: p.status, title: p.title });
+                } else if (p.type === 'text' && p.text) {
+                  out(`  ${p.text}`);
+                  seen.set(key, { value });
+                }
+              }
+            }
+          } catch (err) { if (generation !== watchGeneration || closed) return; const message = `执行器活动读取失败:${err.message}`; if (ui) ui.watch(`● T-${id} · ${message}`); else if (last !== message) out(message); last = message; }
+          finally { inFlight = false; }
+        };
+        await poll();
+        watchTimer = setInterval(poll, 2000);
+        watchTimer.unref();
+        return;
+      }
       case 'clear':
         if (ui) ui.clear();
         else out('(清屏已跳过:纯文本模式下不动终端)');
@@ -539,6 +599,10 @@ async function startChat(flags) {
   }
 
   const queue = [];
+  let watchTimer = null;
+  let watchGeneration = 0;
+  let watchSnapshot = null;
+  let watchExpanded = false;
   let busy = false;
   async function drain() {
     if (busy) return;
@@ -600,6 +664,8 @@ async function startChat(flags) {
     reportSeen();
     typing(false);
     quotas.stop();
+    watchGeneration++;
+    clearInterval(watchTimer);
     ui?.stop();
     ctl.abort();
     try {

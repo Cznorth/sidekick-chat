@@ -191,3 +191,17 @@ test('HUD stays below the editor without a shortcut footer and preserves typed t
     ui.stop(); await terminal.flush(); terminal.screen.dispose();
   }
 });
+
+test('executor watch replaces its live panel and preserves the input cursor', async () => {
+  const terminal = new Terminal(); const sent = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit: (text) => sent.push(text), onQuit() {} });
+  ui.start();
+  try {
+    terminal.input('草稿'); terminal.input('\u001b[D');
+    ui.watch('● T-42 · running\n  ⎿ npm test\n    first'); await terminal.flush();
+    ui.watch('● T-42 · running\n  ⎿ npm test\n    second'); await terminal.flush();
+    assert.ok(!terminal.text().includes('first')); assert.match(terminal.text(), /second/);
+    terminal.input('X'); terminal.input('\r'); assert.deepEqual(sent, ['草X稿']);
+    ui.watch(''); await terminal.flush(); assert.ok(!terminal.text().includes('second'));
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
+});
