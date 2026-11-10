@@ -251,3 +251,19 @@ test('slash displays filtered command suggestions and accepts a selection', asyn
     assert.deepEqual(sent, ['/watch 42']);
   } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
 });
+
+test('terminal messages render image and file URLs without attachment numbers', async () => {
+  const terminal = new Terminal();
+  terminal.columns = 120;
+  terminal.screen.resize(120, 24);
+  const ui = createChatUI({ color: false, terminal, onSubmit() {}, onQuit() {} });
+  ui.start();
+  try {
+    ui.message({ seq: 42, from: 'bot', ts: 0, text: '附件', images: ['a.png'], files: [{ name: 'b.txt', title: '报告.txt' }] },
+      { bots: [], color: false, attachmentUrl: (kind, name) => `https://test.local/v1/team/${kind}?name=${name}` });
+    await terminal.flush();
+    assert.match(terminal.text(), /https:\/\/test.local\/v1\/team\/image\?name=a.png/);
+    assert.match(terminal.text(), /https:\/\/test.local\/v1\/team\/file\?name=b.txt/);
+    assert.doesNotMatch(terminal.text(), /\/open 42|附件 2/);
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
+});

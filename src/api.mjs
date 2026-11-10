@@ -150,7 +150,12 @@ export class SidekickApi {
   }
 
   imageUrl(name) {
-    return `${this.base}/v1/team/image?name=${encodeURIComponent(name)}`;
+    return this.attachmentUrl('image', name);
+  }
+
+  attachmentUrl(kind, name) {
+    if (!['image', 'file'].includes(kind)) throw new Error('无效的附件类型');
+    return `${this.base}/v1/team/${kind}?name=${encodeURIComponent(name)}`;
   }
 
   async attachment(kind, name, { signal } = {}) {

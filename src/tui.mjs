@@ -1,5 +1,5 @@
 import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
-import { paint, formatMessage } from './format.mjs';
+import { paint, formatMessage, attachmentLines } from './format.mjs';
 import { formatTasks } from './watch.mjs';
 
 export function markdownTheme(color) {
@@ -117,9 +117,7 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, o
       transcript.addChild(message.from === 'user'
         ? new Text(String(message.text ?? ''), 2, 0)
         : new Markdown(String(message.text ?? ''), 2, 0, markdownTheme(color)));
-      for (const [index, name] of (message.images ?? []).entries()) transcript.addChild(new Text(`[图片 ${index + 1}] ${options.imageUrl?.(name) || name}`, 2, 0));
-      for (const [index, file] of (message.files ?? []).entries()) transcript.addChild(new Text(`[附件 ${index + 1 + (message.images?.length || 0)}] ${String(file.title || file.name).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')}`, 2, 0));
-      if ((message.images?.length || message.files?.length) && Number.isSafeInteger(message.seq)) transcript.addChild(new Text(`附件: /open ${message.seq} [序号]`, 2, 0));
+      for (const line of attachmentLines(message, options)) transcript.addChild(new Text(line, 2, 0));
       tui.requestRender();
     },
     draft(frame, options) {

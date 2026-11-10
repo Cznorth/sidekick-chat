@@ -33,7 +33,7 @@ import { ccwebBase, createQuotaReader, formatQuota } from './quota.mjs';
 import { clipboardImage, imageFile } from './images.mjs';
 import { formatActivity, applyActivity } from './activity.mjs';
 import { formatWatch } from './watch.mjs';
-import { messageAttachments, openAttachment, saveAttachment } from './attachments.mjs';
+import { attachmentFromUrl, messageAttachments, openAttachment, saveAttachment } from './attachments.mjs';
 
 const PACKAGE_VERSION = (() => {
   try {
@@ -205,7 +205,7 @@ async function askOnce(flags, text) {
           if (payload.conv !== conv || payload.from === 'user') return;
           got.push(payload);
           if (flags.json) stdout(JSON.stringify(payload));
-          else stdout(plainMessage(payload, state.bots));
+          else stdout(plainMessage(payload, state.bots, { attachmentUrl: (kind, name) => api.attachmentUrl(kind, name) }));
           clearTimeout(idleTimer);
           idleTimer = setTimeout(() => ctl.abort(), idleMs);
         } else if (event === 'busy' && conv.startsWith('dm:') && payload.busy === false && got.length > 0) {
@@ -324,7 +324,7 @@ async function startChat(flags) {
   const present = () => lastInputAt > 0 && Date.now() - lastInputAt < PRESENT_MS;
 
   const printMessage = (message) => {
-    const options = { bots: state.bots, color, imageUrl: (name) => api.imageUrl(name) };
+    const options = { bots: state.bots, color, attachmentUrl: (kind, name) => api.attachmentUrl(kind, name) };
     if (ui) ui.message(message, options);
     else out(formatMessage(message, options));
   };
@@ -461,6 +461,14 @@ async function startChat(flags) {
     const arg = rest.join(' ');
     switch (cmd) {
       case 'open': {
+        if (rest.length === 1 && /^https?:\/\//i.test(rest[0])) {
+          const attachment = attachmentFromUrl(api, rest[0]);
+          const path = await saveAttachment(api, attachment, { signal: ctl.signal });
+          out(`附件已保存到 ${path}`);
+          try { await openAttachment(path); }
+          catch (err) { out(`无法启动系统查看器:${err.message}；可手动打开上面的文件`); }
+          return;
+        }
         const [seqText, indexText = '1'] = rest;
         const seq = Number(seqText);
         const index = Number(indexText);
@@ -502,7 +510,7 @@ async function startChat(flags) {
           '/usage           查询额度，查看剩余比例和重置时间',
           '/watch <任务号>  查看执行器 · /watch expand 展开 · /watch off 关闭',
           'Ctrl+T           键盘选择 HUD 任务，Enter 查看，Esc 返回',
-          '/open <消息号> [序号]  下载并用系统应用打开附件',
+          '/open <附件URL>  下载并用系统应用打开附件',
           '/paste           添加剪贴板图片（也可 Ctrl+V）',
           '/image <路径>    添加图片文件，最多 4 张、每张 6 MB',
           '/send [文字]     发送待发送图片；也可直接输入文字或回车',

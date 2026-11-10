@@ -10,6 +10,22 @@ export function messageAttachments(message) {
   ];
 }
 
+export function attachmentFromUrl(api, value) {
+  let url;
+  try { url = new URL(value); } catch { throw new Error('附件链接无效'); }
+  if (url.username || url.password || url.hash || [...url.searchParams.keys()].length !== 1 || !url.searchParams.get('name')) throw new Error('附件链接无效');
+  for (const base of [api.primary, ...api.alts]) {
+    const root = new URL(base);
+    for (const kind of ['image', 'file']) {
+      if (url.origin === root.origin && url.pathname === `${root.pathname.replace(/\/$/, '')}/v1/team/${kind}`) {
+        const name = url.searchParams.get('name');
+        return { kind, name, title: name };
+      }
+    }
+  }
+  throw new Error('只能打开已配置的 Sidekick 附件链接');
+}
+
 export async function saveAttachment(api, attachment, { signal } = {}) {
   const data = await api.attachment(attachment.kind, attachment.name, { signal });
   const directory = await mkdtemp(join(tmpdir(), 'sidekick-attachment-'));
