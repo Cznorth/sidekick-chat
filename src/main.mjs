@@ -33,6 +33,7 @@ import { ccwebBase, createQuotaReader, formatQuota } from './quota.mjs';
 import { clipboardImage, imageFile } from './images.mjs';
 import { formatActivity, applyActivity } from './activity.mjs';
 import { formatWatch } from './watch.mjs';
+import { messageAttachments, openAttachment, saveAttachment } from './attachments.mjs';
 
 const PACKAGE_VERSION = (() => {
   try {
@@ -457,6 +458,22 @@ async function startChat(flags) {
     const cmd = (raw || '').toLowerCase();
     const arg = rest.join(' ');
     switch (cmd) {
+      case 'open': {
+        const [seqText, indexText = '1'] = rest;
+        const seq = Number(seqText);
+        const index = Number(indexText);
+        if (!Number.isSafeInteger(seq) || seq < 1 || !Number.isSafeInteger(index) || index < 1 || rest.length > 2) throw new Error('用法:/open <消息号> [附件序号]');
+        const history = await api.history(convId, 500);
+        const message = history.messages.find((item) => item.seq === seq);
+        if (!message) throw new Error('当前会话最近 500 条消息中找不到该消息');
+        const attachment = messageAttachments(message)[index - 1];
+        if (!attachment) throw new Error('找不到该附件序号');
+        const path = await saveAttachment(api, attachment, { signal: ctl.signal });
+        out(`附件已保存到 ${path}`);
+        try { await openAttachment(path); }
+        catch (err) { out(`无法启动系统查看器:${err.message}；可手动打开上面的文件`); }
+        return;
+      }
       case 'paste':
         addImage(await clipboardImage());
         return;
@@ -482,6 +499,7 @@ async function startChat(flags) {
           '/context         当前会话各助理的上下文用量和预算',
           '/usage           查询额度，查看剩余比例和重置时间',
           '/watch <任务号>  查看执行器 · /watch expand 展开 · /watch off 关闭',
+          '/open <消息号> [序号]  下载并用系统应用打开附件',
           '/paste           添加剪贴板图片（也可 Ctrl+V）',
           '/image <路径>    添加图片文件，最多 4 张、每张 6 MB',
           '/send [文字]     发送待发送图片；也可直接输入文字或回车',

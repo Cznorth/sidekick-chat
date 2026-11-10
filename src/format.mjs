@@ -65,9 +65,13 @@ export function formatMessage(message, { bots = [], color = false, imageUrl } = 
   }
   const body = String(message.text ?? '');
   for (const line of body.split('\n')) lines.push(`  ${line}`);
-  for (const name of message.images ?? []) {
+  for (const [index, name] of (message.images ?? []).entries()) {
     const link = imageUrl ? ` ${imageUrl(name)}` : '';
-    lines.push(`  ${paint(color, 'gray', `[图片]${link}`)}`);
+    lines.push(`  ${paint(color, 'gray', `[图片]${link} (${index + 1})`)}`);
+  }
+  for (const [index, file] of (message.files ?? []).entries()) lines.push(`  ${paint(color, 'gray', `[附件 ${index + 1 + (message.images?.length || 0)}] ${oneLine(String(file.title || file.name).replace(/[\x00-\x1f\x7f-\x9f]/g, ' '))}`)}`);
+  if ((message.images?.length || message.files?.length) && Number.isSafeInteger(message.seq)) {
+    lines.push(`  ${paint(color, 'gray', `附件: /open ${message.seq} [序号]`)}`);
   }
   return lines.join('\n');
 }
@@ -88,7 +92,9 @@ export function oneLine(text, n = 60) {
 
 /** 一条消息的纯文本版(一次性模式打印用,便于管道)。 */
 export function plainMessage(message, bots = []) {
-  return `${senderName(message, bots)}: ${String(message.text ?? '')}`.trimEnd();
+  const safe = (value) => oneLine(String(value ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' '));
+  const attachments = [...(message.images ?? []).map((name) => `[图片] ${safe(name)}`), ...(message.files ?? []).map((file) => `[附件] ${safe(file.title || file.name)}`)];
+  return [`${senderName(message, bots)}: ${String(message.text ?? '')}`.trimEnd(), ...attachments].join('\n');
 }
 
 export { ANSI };

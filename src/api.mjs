@@ -153,6 +153,32 @@ export class SidekickApi {
     return `${this.base}/v1/team/image?name=${encodeURIComponent(name)}`;
   }
 
+  async attachment(kind, name, { signal } = {}) {
+    if (!['image', 'file'].includes(kind) || typeof name !== 'string' || !name) throw new Error('无效的附件');
+    return this.attempt(async (base) => {
+      const url = `${base}/v1/team/${kind}?name=${encodeURIComponent(name)}`;
+      let res;
+      try {
+        res = await fetch(url, { headers: this.headers, redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      } catch (err) {
+        if (signal?.aborted) throw signal.reason;
+        throw new NetworkError(networkHint(url, err));
+      }
+      if (res.status === 401) throw new AuthError('登录态已失效');
+      if (!res.ok) throw new HttpError(res.status, `附件下载失败:HTTP ${res.status}`);
+      const limit = 60 * 1024 * 1024;
+      if (Number(res.headers.get('content-length')) > limit) throw new Error('附件超过 60 MB');
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of res.body) {
+        size += chunk.length;
+        if (size > limit) throw new Error('附件超过 60 MB');
+        chunks.push(chunk);
+      }
+      return Buffer.concat(chunks, size);
+    });
+  }
+
   /**
    * 订阅推流,断了按退避重连,重连时带上最后的 seq 把漏掉的补齐。
    * `onEvent(event, payload)` 收到 hello / state / message / draft / thinking / busy / activity / read。
