@@ -1,5 +1,6 @@
-import { Container, Editor, Markdown, ProcessTerminal, Text, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
+import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
 import { paint, formatMessage } from './format.mjs';
+import { formatTasks } from './watch.mjs';
 
 export function markdownTheme(color) {
   const style = (code) => (text) => paint(color, code, text);
@@ -12,7 +13,7 @@ export function markdownTheme(color) {
 }
 
 /** Pi's renderer owns every screen write, including the editor and busy status. */
-export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, hasImages = () => false, terminal = new ProcessTerminal() }) {
+export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, onTaskSelect, onTaskClose, hasImages = () => false, terminal = new ProcessTerminal() }) {
   const tui = new TuiMainScreen(terminal);
   const transcript = new Container();
   const live = new Container();
@@ -24,6 +25,13 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, h
     drafts.delete(key);
   };
   const watch = new Text('', 1, 0);
+  const taskHud = new Text('', 1, 0);
+  let tasks = [];
+  let taskError = '';
+  let selecting = false;
+  let selected = 0;
+  let viewingTask = false;
+  const renderTasks = () => { taskHud.setText(formatTasks(tasks, { selected, selecting, error: taskError })); tui.requestRender(); };
   const activity = new Text('', 1, 0);
   const status = new Text('', 1, 0);
   const identity = (text) => text;
@@ -31,10 +39,19 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, h
     borderColor: (text) => paint(color, 'gray', text),
     selectList: Object.fromEntries(['selectedPrefix', 'selectedText', 'description', 'scrollInfo', 'noMatch'].map((key) => [key, identity])),
   });
+  editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
+    ['help', '显示命令'], ['conv', '列出会话'], ['to', '切换会话'], ['history', '查看历史'],
+    ['who', '查看成员'], ['context', '查看上下文'], ['usage', '查看额度'], ['watch', '观察任务'],
+    ['open', '打开附件'], ['paste', '粘贴图片'], ['image', '添加图片'], ['send', '发送消息'],
+    ['drop', '清除图片'], ['clear', '清屏'], ['quit', '退出'],
+    ['convs', '列出会话'], ['ls', '列出会话'], ['switch', '切换会话'], ['h', '查看历史'],
+    ['quota', '查看额度'], ['exit', '退出'], ['q', '退出'], ['?', '显示命令'],
+  ].map(([name, description]) => ({ name, description })), process.cwd()));
   tui.addChild(transcript);
   tui.addChild(live);
   tui.addChild(watch);
   tui.addChild(editor);
+  tui.addChild(taskHud);
   tui.addChild(activity);
   tui.addChild(status);
   const attachments = new Text('', 1, 0);
@@ -43,6 +60,35 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, h
   tui.addInputListener((data) => {
     // 任何一个按键都算「人在终端前面」:调用方据此决定要不要把新消息标成已读。
     onInput?.(data);
+    if (matchesKey(data, 'ctrl+t')) {
+      selecting = !selecting;
+      if (selecting) selected = 0;
+      renderTasks();
+      return { consume: true };
+    }
+    if (selecting) {
+      if (matchesKey(data, 'escape')) { selecting = false; renderTasks(); return { consume: true }; }
+      if (matchesKey(data, 'up') || matchesKey(data, 'down')) {
+        selected = Math.max(0, Math.min(tasks.length, selected + (matchesKey(data, 'up') ? -1 : 1)));
+        renderTasks();
+        return { consume: true };
+      }
+      if (matchesKey(data, 'enter')) {
+        selecting = false;
+        viewingTask = selected > 0;
+        if (viewingTask) onTaskSelect?.(tasks[selected - 1].id);
+        else onTaskClose?.();
+        renderTasks();
+        return { consume: true };
+      }
+      if (data === '\u0003') { onQuit(); return { consume: true }; }
+      return { consume: true };
+    }
+    if (viewingTask && matchesKey(data, 'escape')) {
+      viewingTask = false;
+      onTaskClose?.();
+      return { consume: true };
+    }
     if (matchesKey(data, 'ctrl+v') && onPasteImage) {
       onPasteImage();
       return { consume: true };
@@ -97,6 +143,13 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, h
     },
     clearDrafts() { drafts.clear(); live.clear(); tui.requestRender(); },
     watch(text) { watch.setText(text); tui.requestRender(); },
+    tasks(next, error = '') {
+      const selectedId = selected > 0 ? tasks[selected - 1]?.id : null;
+      tasks = next;
+      taskError = error;
+      selected = selectedId == null ? 0 : Math.max(0, tasks.findIndex((task) => task.id === selectedId) + 1);
+      renderTasks();
+    },
     activity(text) { activity.setText(paint(color, 'gray', text)); tui.requestRender(); },
     typing(on) { status.setText(on ? paint(color, 'gray', '… 正在输入') : ''); tui.requestRender(); },
     clear() { transcript.clear(); drafts.clear(); live.clear(); tui.requestRender(true); },

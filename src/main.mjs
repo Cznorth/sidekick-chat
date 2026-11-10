@@ -331,6 +331,8 @@ async function startChat(flags) {
   if (vt) {
     const { createChatUI } = await import('./tui.mjs');
     ui = createChatUI({ color, hasImages: () => pendingImages.length > 0,
+      onTaskSelect: (id) => { void handleSlash(`/watch ${id}`, true).catch((err) => out(err.message)); },
+      onTaskClose: () => { void handleSlash('/watch off', true).catch((err) => out(err.message)); },
       onPasteImage: () => { queue.push(async () => addImage(await clipboardImage())); void drain(); },
       onInput: () => markPresent(), onSubmit: (text) => {
       markPresent();
@@ -453,7 +455,7 @@ async function startChat(flags) {
     return printHistory(30);
   }
 
-  async function handleSlash(line) {
+  async function handleSlash(line, silent = false) {
     const [raw, ...rest] = line.slice(1).trim().split(/\s+/);
     const cmd = (raw || '').toLowerCase();
     const arg = rest.join(' ');
@@ -499,6 +501,7 @@ async function startChat(flags) {
           '/context         当前会话各助理的上下文用量和预算',
           '/usage           查询额度，查看剩余比例和重置时间',
           '/watch <任务号>  查看执行器 · /watch expand 展开 · /watch off 关闭',
+          'Ctrl+T           键盘选择 HUD 任务，Enter 查看，Esc 返回',
           '/open <消息号> [序号]  下载并用系统应用打开附件',
           '/paste           添加剪贴板图片（也可 Ctrl+V）',
           '/image <路径>    添加图片文件，最多 4 张、每张 6 MB',
@@ -560,7 +563,7 @@ async function startChat(flags) {
         clearInterval(watchTimer);
         watchTimer = null;
         ui?.watch('');
-        if (!arg || arg === 'off') { watchSnapshot = null; ui?.watch(''); out('已关闭执行器观察'); return; }
+        if (!arg || arg === 'off') { watchSnapshot = null; ui?.watch(''); if (!silent) out('已关闭执行器观察'); return; }
         const id = Number(arg.replace(/^T-/i, ''));
         if (!Number.isSafeInteger(id) || id < 1) throw new Error('用法:/watch <任务号>');
         const cc = new SidekickApi({ url: ccwebBase(settings.url), alts: (settings.alts || []).map(ccwebBase), token: settings.token, cookie: settings.cookie });
@@ -603,6 +606,7 @@ async function startChat(flags) {
           finally { inFlight = false; }
         };
         await poll();
+        if (generation !== watchGeneration || closed) return;
         watchTimer = setInterval(poll, 2000);
         watchTimer.unref();
         return;
@@ -621,6 +625,9 @@ async function startChat(flags) {
   let watchGeneration = 0;
   let watchSnapshot = null;
   let watchExpanded = false;
+  let taskTimer = null;
+  let taskPolling = false;
+  let hudTasks = [];
   let busy = false;
   async function drain() {
     if (busy) return;
@@ -660,6 +667,21 @@ async function startChat(flags) {
 
   if (ui) {
     ui.start();
+    const refreshTasks = async () => {
+      if (taskPolling || closed) return;
+      taskPolling = true;
+      try {
+        const result = await api.request('GET', 'v1/tasks?filter=current&fields=title,status,createdAt,startedAt,finishedAt', undefined, { signal: ctl.signal });
+        if (!Array.isArray(result.tasks)) throw new Error('响应缺少任务列表');
+        hudTasks = result.tasks.filter((task) => Number.isSafeInteger(task.id) && task.id > 0);
+        if (!closed) ui.tasks(hudTasks);
+      } catch (err) {
+        if (!closed) ui.tasks(hudTasks, err instanceof Error ? err.message : String(err));
+      } finally { taskPolling = false; }
+    };
+    void refreshTasks();
+    taskTimer = setInterval(refreshTasks, 5000);
+    taskTimer.unref();
   } else {
     rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
     rl.on('line', (line) => {
@@ -684,6 +706,7 @@ async function startChat(flags) {
     quotas.stop();
     watchGeneration++;
     clearInterval(watchTimer);
+    clearInterval(taskTimer);
     ui?.stop();
     ctl.abort();
     try {

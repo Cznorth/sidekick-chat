@@ -205,3 +205,49 @@ test('executor watch replaces its live panel and preserves the input cursor', as
     ui.watch(''); await terminal.flush(); assert.ok(!terminal.text().includes('second'));
   } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
 });
+
+test('task HUD supports keyboard selection and preserves the draft', async () => {
+  const terminal = new Terminal();
+  const selected = [];
+  const sent = [];
+  let closed = 0;
+  const ui = createChatUI({ color: false, terminal, onSubmit: (text) => sent.push(text), onQuit() {},
+    onTaskSelect: (id) => selected.push(id), onTaskClose: () => closed++ });
+  ui.start();
+  try {
+    ui.tasks([{ id: 42, title: '修复任务', status: 'running', startedAt: '2026-11-10T00:00:00Z' },
+      { id: 43, title: '另一个', status: 'waiting', createdAt: '2026-11-10T00:00:00Z' }]);
+    terminal.input('草稿'); terminal.input('\u0014'); terminal.input('\u001b[B');
+    await terminal.flush();
+    assert.match(terminal.text(), /T-42.*修复任务.*running/);
+    terminal.input('\r');
+    assert.deepEqual(selected, [42]);
+    terminal.input('\u001b');
+    assert.equal(closed, 1);
+    terminal.input('\u0014'); terminal.input('\u001b[B');
+    ui.tasks([{ id: 43, title: '另一个', status: 'waiting' }, { id: 42, title: '修复任务', status: 'running' }]);
+    terminal.input('\r');
+    assert.deepEqual(selected, [42, 42]);
+    terminal.input('\u0014'); terminal.input('\r');
+    assert.equal(closed, 2);
+    terminal.input('继续'); terminal.input('\r');
+    assert.deepEqual(sent, ['草稿继续']);
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
+});
+
+test('slash displays filtered command suggestions and accepts a selection', async () => {
+  const terminal = new Terminal();
+  const sent = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit: (text) => sent.push(text), onQuit() {} });
+  ui.start();
+  try {
+    terminal.input('/');
+    await terminal.flush();
+    assert.match(terminal.text(), /help/);
+    terminal.input('watch');
+    await terminal.flush();
+    assert.match(terminal.text(), /观察任务/);
+    terminal.input('\t'); terminal.input('42'); terminal.input('\r');
+    assert.deepEqual(sent, ['/watch 42']);
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
+});
