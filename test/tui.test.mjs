@@ -39,13 +39,47 @@ test('image paste shortcut preserves text and allows image-only submission', asy
   ui.start();
   try {
     terminal.input('看看');
-    terminal.input('\u0016');
+    terminal.input('\u0007');
     await terminal.flush();
     assert.match(terminal.text(), /待发送图片 1\/4/);
     terminal.input('\r');
     assert.deepEqual(sent, ['看看']);
     terminal.input('\r');
     assert.deepEqual(sent, ['看看', '']);
+  } finally {
+    ui.stop();
+    await terminal.flush();
+    terminal.screen.dispose();
+  }
+});
+
+test('clicking task links opens the selected card after querying the cursor position', async () => {
+  const terminal = new Terminal();
+  const opened = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit() {}, onQuit() {}, onOpenCard: (uri) => opened.push(uri) });
+  ui.start();
+  try {
+    ui.message({ seq: 1, from: 'bot', ts: 0, text: '结果 [看全文](sidekick://task/915) 和 [旧内容](sidekick://board/42)' }, { bots: [], color: false });
+    await terminal.flush();
+    const screen = terminal.screen.buffer.active;
+    const findRow = (needle) => {
+      for (let y = 0; y < terminal.rows; y++) {
+        if (screen.getLine(screen.viewportY + y)?.translateToString(true).includes(needle)) return y + 1;
+      }
+      throw new Error(`missing ${needle}`);
+    };
+    const click = async (row) => {
+      const cursorRow = screen.cursorY + 1;
+      terminal.input(`\x1b[<0;4;${row}M`);
+      terminal.input(`\x1b[<0;4;${row}m`);
+      terminal.input(`\x1b[${cursorRow};1R`);
+      await terminal.flush();
+    };
+    await click(findRow('[看全文'));
+    await click(findRow('[旧内容'));
+    assert.deepEqual(opened, ['sidekick://task/915', 'sidekick://board/42']);
+    await click(findRow('结果'));
+    assert.equal(opened.length, 2);
   } finally {
     ui.stop();
     await terminal.flush();
@@ -190,4 +224,95 @@ test('HUD stays below the editor without a shortcut footer and preserves typed t
   } finally {
     ui.stop(); await terminal.flush(); terminal.screen.dispose();
   }
+});
+
+test('executor watch replaces its live panel and preserves the input cursor', async () => {
+  const terminal = new Terminal(); const sent = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit: (text) => sent.push(text), onQuit() {} });
+  ui.start();
+  try {
+    terminal.input('草稿'); terminal.input('\u001b[D');
+    ui.watch('● T-42 · running\n  ⎿ npm test\n    first'); await terminal.flush();
+    ui.watch('● T-42 · running\n  ⎿ npm test\n    second'); await terminal.flush();
+    assert.ok(!terminal.text().includes('first')); assert.match(terminal.text(), /second/);
+    terminal.input('X'); terminal.input('\r'); assert.deepEqual(sent, ['草X稿']);
+    ui.watch(''); await terminal.flush(); assert.ok(!terminal.text().includes('second'));
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
+});
+
+test('task HUD supports keyboard selection and preserves the draft', async () => {
+  const terminal = new Terminal();
+  const selected = [];
+  const sent = [];
+  let closed = 0;
+  const ui = createChatUI({ color: false, terminal, onSubmit: (text) => sent.push(text), onQuit() {},
+    onTaskSelect: (id) => selected.push(id), onTaskClose: () => closed++ });
+  ui.start();
+  try {
+    ui.tasks([{ id: 42, title: '修复任务', status: 'running', startedAt: '2026-11-10T00:00:00Z' },
+      { id: 43, title: '另一个', status: 'waiting', createdAt: '2026-11-10T00:00:00Z' }]);
+    terminal.input('草稿'); terminal.input('\u0014'); terminal.input('\u001b[B');
+    await terminal.flush();
+    assert.match(terminal.text(), /T-42.*修复任务.*running/);
+    terminal.input('\r');
+    assert.deepEqual(selected, [42]);
+    terminal.input('\u001b');
+    assert.equal(closed, 1);
+    terminal.input('\u0014'); terminal.input('\u001b[B');
+    ui.tasks([{ id: 43, title: '另一个', status: 'waiting' }, { id: 42, title: '修复任务', status: 'running' }]);
+    terminal.input('\r');
+    assert.deepEqual(selected, [42, 42]);
+    terminal.input('\u0014'); terminal.input('\r');
+    assert.equal(closed, 2);
+    terminal.input('继续'); terminal.input('\r');
+    assert.deepEqual(sent, ['草稿继续']);
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
+});
+
+test('empty editor arrows enter the always-visible task list', async () => {
+  const terminal = new Terminal();
+  const selected = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit() {}, onQuit() {}, onTaskSelect: (id) => selected.push(id) });
+  ui.start();
+  try {
+    ui.tasks([{ id: 42, title: '修复任务', status: 'running' }, { id: 43, title: '另一个', status: 'waiting' }]);
+    terminal.input('\u001b[B');
+    await terminal.flush();
+    assert.match(terminal.text(), /› T-42/);
+    terminal.input('\r');
+    assert.deepEqual(selected, [42]);
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
+});
+
+test('slash displays filtered command suggestions and accepts a selection', async () => {
+  const terminal = new Terminal();
+  const sent = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit: (text) => sent.push(text), onQuit() {} });
+  ui.start();
+  try {
+    terminal.input('/');
+    await terminal.flush();
+    assert.match(terminal.text(), /help/);
+    terminal.input('watch');
+    await terminal.flush();
+    assert.match(terminal.text(), /观察任务/);
+    terminal.input('\t'); terminal.input('42'); terminal.input('\r');
+    assert.deepEqual(sent, ['/watch 42']);
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
+});
+
+test('terminal messages render image and file URLs without attachment numbers', async () => {
+  const terminal = new Terminal();
+  terminal.columns = 120;
+  terminal.screen.resize(120, 24);
+  const ui = createChatUI({ color: false, terminal, onSubmit() {}, onQuit() {} });
+  ui.start();
+  try {
+    ui.message({ seq: 42, from: 'bot', ts: 0, text: '附件', images: ['a.png'], files: [{ name: 'b.txt', title: '报告.txt' }] },
+      { bots: [], color: false, attachmentUrl: (kind, name) => `https://test.local/v1/team/${kind}?name=${name}` });
+    await terminal.flush();
+    assert.match(terminal.text(), /https:\/\/test.local\/v1\/team\/image\?name=a.png/);
+    assert.match(terminal.text(), /https:\/\/test.local\/v1\/team\/file\?name=b.txt/);
+    assert.doesNotMatch(terminal.text(), /\/open 42|附件 2/);
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
 });

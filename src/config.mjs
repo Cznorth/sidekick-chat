@@ -7,8 +7,17 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 export const DEFAULT_URL = 'https://hkv4.cznorth.cn/chat';
-/** 主线路连不上时自动换的备用线路(杭州阿里云 frps 把 chat World 的 18792 开在公网)。 */
-export const DEFAULT_ALT = 'http://47.96.64.66:18792';
+/**
+ * 主线路(香港)连不上时按顺序换的备用线路:
+ * 1. 美国直连(kiro.ch66.top 的证书在美机上,`/sk-us` 前缀转到各 World);
+ * 2. 阿里云 frps → 香港 OpenResty → 美国(和主线路同一个后端,只是入口在杭州)。
+ */
+export const DEFAULT_ALTS = [
+  'https://kiro.ch66.top/sk-us/chat',
+  'http://47.96.64.66:18792/chat',
+];
+/** 旧配置里的单条备用线路;仍然是「阿里云 → 美国」,现在中间也经香港。 */
+export const DEFAULT_ALT = DEFAULT_ALTS[1];
 
 export function configPath() {
   return process.env.SIDEKICK_CONFIG || join(homedir(), '.sidekick', 'config.json');
@@ -48,13 +57,17 @@ export function clearConfig() {
 export function resolveSettings(flags = {}) {
   const saved = readConfig();
   const url = String(flags.url || process.env.SIDEKICK_URL || saved.url || DEFAULT_URL).trim();
-  const alt = String(flags.alt || process.env.SIDEKICK_ALT || saved.alt || defaultAltFor(url)).trim();
+  const rawAlts = flags.alts ?? flags.alt ?? process.env.SIDEKICK_ALTS ?? process.env.SIDEKICK_ALT
+    ?? upgradeSavedAlts(saved) ?? defaultAltsFor(url);
+  const alts = normalizeAlts(rawAlts).map(stripTrailingSlash);
   const token = String(flags.token || process.env.SIDEKICK_TOKEN || saved.token || '').trim();
   const cookie = String(process.env.SIDEKICK_COOKIE || saved.cookie || '').trim();
   const device = String(flags.device || process.env.SIDEKICK_DEVICE || saved.device || '终端').trim();
   return {
     url: stripTrailingSlash(url),
-    alt: stripTrailingSlash(alt),
+    /** 旧代码只认单条备用线路,保留第一个。 */
+    alt: alts[0] || '',
+    alts,
     token,
     cookie,
     device,
@@ -64,13 +77,34 @@ export function resolveSettings(flags = {}) {
   };
 }
 
+/** 旧版本登录时会自动把单条杭州备用线路写进 `alt`;读到它就升级成新的两条默认线路。 */
+export function upgradeSavedAlts(saved) {
+  if (Array.isArray(saved.alts)) return saved.alts;
+  if (!saved.alt) return undefined;
+  const old = stripTrailingSlash(String(saved.alt));
+  if (old === 'http://47.96.64.66:18792' || old === 'http://47.96.64.66:18792/chat') return [...DEFAULT_ALTS];
+  return [saved.alt];
+}
+
+/** `--alt` 可重复,也可写成逗号/空格/换行分隔;数组要原样保留。 */
+export function normalizeAlts(value) {
+  if (value === undefined || value === null) return [];
+  const list = Array.isArray(value) ? value : String(value).split(/[,\s]+/);
+  return [...new Set(list.map((v) => String(v ?? '').trim()).filter(Boolean))];
+}
+
 export function stripTrailingSlash(url) {
   return url.replace(/\/+$/, '');
 }
 
 /** 用默认的主线路时自动带上已知的备用线路;自己指定 `--url` 就只走那一条。 */
+export function defaultAltsFor(url) {
+  return stripTrailingSlash(url) === DEFAULT_URL ? [...DEFAULT_ALTS] : [];
+}
+
+/** 兼容旧调用:只要第一条备用线路。 */
 export function defaultAltFor(url) {
-  return stripTrailingSlash(url) === DEFAULT_URL ? DEFAULT_ALT : '';
+  return defaultAltsFor(url)[0] || '';
 }
 
 /** WebUI 的登录接口在站点根上,不在 `/chat/` 这类前缀下面。 */

@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { AuthError, SidekickApi, loginWithPassword } from './api.mjs';
 import {
-  DEFAULT_ALT,
+  DEFAULT_ALTS,
   DEFAULT_URL,
   clearConfig,
   configPath,
@@ -29,9 +29,11 @@ import {
   plainMessage,
 } from './format.mjs';
 import { ask, askPassword } from './prompt.mjs';
-import { createQuotaReader, formatQuota } from './quota.mjs';
+import { ccwebBase, createQuotaReader, formatQuota } from './quota.mjs';
 import { clipboardImage, imageFile } from './images.mjs';
 import { formatActivity, applyActivity } from './activity.mjs';
+import { formatWatch } from './watch.mjs';
+import { attachmentFromUrl, messageAttachments, openAttachment, saveAttachment } from './attachments.mjs';
 
 const PACKAGE_VERSION = (() => {
   try {
@@ -54,7 +56,8 @@ const HELP = `Sidekick 终端客户端 ${PACKAGE_VERSION}
 
 参数:
   --url <地址>      服务器地址,默认 ${DEFAULT_URL}
-  --alt <地址>      备用线路,主线路连不上时自动换,默认 ${DEFAULT_ALT}
+  --alt <地址>      备用线路,主线路连不上时按顺序换;可重复或逗号分隔
+                    默认:${DEFAULT_ALTS.join(' , ')}
   --token <令牌>    设备令牌(部署 .env 的 SIDEKICK_DEVICE_TOKEN),跳过密码登录
   --password <密码> 网页登录密码(不给就在终端里问)
   --conv <会话>     指定会话:id、名字或 /conv 列表里的序号,默认和秘书的私聊
@@ -68,13 +71,13 @@ const HELP = `Sidekick 终端客户端 ${PACKAGE_VERSION}
 
 进交互后可用 /help 看命令,/conv 列会话,/to 切换,Ctrl-C 退出。
 
-环境变量(优先于配置文件):SIDEKICK_URL、SIDEKICK_ALT、SIDEKICK_TOKEN、SIDEKICK_PASSWORD、SIDEKICK_DEVICE、SIDEKICK_COOKIE。
+环境变量(优先于配置文件):SIDEKICK_URL、SIDEKICK_ALT / SIDEKICK_ALTS、SIDEKICK_TOKEN、SIDEKICK_PASSWORD、SIDEKICK_DEVICE、SIDEKICK_COOKIE。
 配置放在 ${configPath()}(权限 600)。`;
 
 /** 命令行参数解析:node 自带的 parseArgs,不引第三方依赖。 */
 function parseFlags(argv) {
   const flags = { positional: [] };
-  const takesValue = new Set(['url', 'alt', 'token', 'password', 'conv', 'device', 'wait']);
+  const takesValue = new Set(['url', 'alt', 'alts', 'token', 'password', 'conv', 'device', 'wait']);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--') {
@@ -107,7 +110,9 @@ function parseFlags(argv) {
       if (!takesValue.has(name)) throw new Error(`不认识的参数:--${name}`);
       const value = eq >= 0 ? arg.slice(eq + 1) : argv[++i];
       if (value === undefined) throw new Error(`--${name} 缺一个值`);
-      flags[name] = value;
+      // --alt 可重复:攒成列表交给 resolveSettings。
+      if (name === 'alt') (flags.alts ??= []).push(value);
+      else flags[name] = value;
       continue;
     }
     flags.positional.push(arg);
@@ -143,10 +148,11 @@ async function loginCommand(flags) {
     cookie = await loginWithPassword(url, password);
   }
 
-  const api = new SidekickApi({ url, alt: current.alt, token, cookie });
+  const api = new SidekickApi({ url, alts: current.alts, token, cookie });
   const state = await api.state();
   const primary = state.bots.find((b) => b.primary);
-  const cfg = { ...readConfig(), url, alt: current.alt, device: current.device || '终端', savedAt: new Date().toISOString() };
+  const cfg = { ...readConfig(), url, alts: current.alts, device: current.device || '终端', savedAt: new Date().toISOString() };
+  delete cfg.alt;
   if (token) {
     cfg.token = token;
     delete cfg.cookie;
@@ -199,7 +205,7 @@ async function askOnce(flags, text) {
           if (payload.conv !== conv || payload.from === 'user') return;
           got.push(payload);
           if (flags.json) stdout(JSON.stringify(payload));
-          else stdout(plainMessage(payload, state.bots));
+          else stdout(plainMessage(payload, state.bots, { attachmentUrl: (kind, name) => api.attachmentUrl(kind, name) }));
           clearTimeout(idleTimer);
           idleTimer = setTimeout(() => ctl.abort(), idleMs);
         } else if (event === 'busy' && conv.startsWith('dm:') && payload.busy === false && got.length > 0) {
@@ -318,13 +324,16 @@ async function startChat(flags) {
   const present = () => lastInputAt > 0 && Date.now() - lastInputAt < PRESENT_MS;
 
   const printMessage = (message) => {
-    const options = { bots: state.bots, color, imageUrl: (name) => api.imageUrl(name) };
+    const options = { bots: state.bots, color, attachmentUrl: (kind, name) => api.attachmentUrl(kind, name) };
     if (ui) ui.message(message, options);
     else out(formatMessage(message, options));
+    for (const link of new Set(String(message.text ?? '').match(/sidekick:\/\/(?:task|board)\/\d+/g) || [])) out(`查看全文：/open ${link}`);
   };
   if (vt) {
     const { createChatUI } = await import('./tui.mjs');
     ui = createChatUI({ color, hasImages: () => pendingImages.length > 0,
+      onTaskSelect: (id) => { void handleSlash(`/watch ${id}`, true).catch((err) => out(err.message)); },
+      onTaskClose: () => { void handleSlash('/watch off', true).catch((err) => out(err.message)); },
       onPasteImage: () => { queue.push(async () => addImage(await clipboardImage())); void drain(); },
       onInput: () => markPresent(), onSubmit: (text) => {
       markPresent();
@@ -447,11 +456,48 @@ async function startChat(flags) {
     return printHistory(30);
   }
 
-  async function handleSlash(line) {
+  async function handleSlash(line, silent = false) {
     const [raw, ...rest] = line.slice(1).trim().split(/\s+/);
     const cmd = (raw || '').toLowerCase();
     const arg = rest.join(' ');
     switch (cmd) {
+      case 'open': {
+        const card = /^sidekick:\/\/(task|board)\/(\d+)$/.exec(arg);
+        if (card) {
+          let id = Number(card[2]);
+          if (!Number.isSafeInteger(id) || id < 1) throw new Error('无效的任务链接');
+          if (card[1] === 'board') {
+            const { item } = await api.request('GET', `v1/board/item?id=${id}`, undefined, { signal: ctl.signal });
+            id = item?.taskId;
+            if (!Number.isSafeInteger(id) || id < 1) throw new Error('这条消息已撤回或没有关联任务');
+          }
+          const detail = await api.request('GET', `v1/tasks/detail?id=${id}`, undefined, { signal: ctl.signal });
+          out(`任务 T-${id} · ${detail.task?.title || ''}\n${(detail.messages || []).map((message) => message.body || '').filter(Boolean).join('\n\n') || '暂无任务消息'}`);
+          return;
+        }
+        if (rest.length === 1 && /^https?:\/\//i.test(rest[0])) {
+          const attachment = attachmentFromUrl(api, rest[0]);
+          const path = await saveAttachment(api, attachment, { signal: ctl.signal });
+          out(`附件已保存到 ${path}`);
+          try { await openAttachment(path); }
+          catch (err) { out(`无法启动系统查看器:${err.message}；可手动打开上面的文件`); }
+          return;
+        }
+        const [seqText, indexText = '1'] = rest;
+        const seq = Number(seqText);
+        const index = Number(indexText);
+        if (!Number.isSafeInteger(seq) || seq < 1 || !Number.isSafeInteger(index) || index < 1 || rest.length > 2) throw new Error('用法:/open <消息号> [附件序号]');
+        const history = await api.history(convId, 500);
+        const message = history.messages.find((item) => item.seq === seq);
+        if (!message) throw new Error('当前会话最近 500 条消息中找不到该消息');
+        const attachment = messageAttachments(message)[index - 1];
+        if (!attachment) throw new Error('找不到该附件序号');
+        const path = await saveAttachment(api, attachment, { signal: ctl.signal });
+        out(`附件已保存到 ${path}`);
+        try { await openAttachment(path); }
+        catch (err) { out(`无法启动系统查看器:${err.message}；可手动打开上面的文件`); }
+        return;
+      }
       case 'paste':
         addImage(await clipboardImage());
         return;
@@ -476,7 +522,11 @@ async function startChat(flags) {
           '/who             名册、连接状态和上下文用量',
           '/context         当前会话各助理的上下文用量和预算',
           '/usage           查询额度，查看剩余比例和重置时间',
-          '/paste           添加剪贴板图片（也可 Ctrl+V）',
+          '/watch <任务号>  查看执行器 · /watch expand 展开 · /watch off 关闭',
+          'Ctrl+T           键盘选择 HUD 任务，Enter 查看，Esc 返回',
+          '/open <附件URL>  下载并用系统应用打开附件',
+          '/open <任务链接> 查看任务全文',
+          '/paste           添加剪贴板图片（也可 Ctrl+G）',
           '/image <路径>    添加图片文件，最多 4 张、每张 6 MB',
           '/send [文字]     发送待发送图片；也可直接输入文字或回车',
           '/drop            清除待发送图片',
@@ -525,6 +575,65 @@ async function startChat(flags) {
       case 'quota':
         out(formatQuota(await quotas.refresh(), { detail: true }));
         return;
+      case 'watch': {
+        if (arg === 'expand' || arg === 'collapse') {
+          watchExpanded = arg === 'expand';
+          if (watchSnapshot && ui) ui.watch(formatWatch(watchSnapshot, watchExpanded));
+          else if (!ui) out('纯文本模式持续打印动作与输出');
+          return;
+        }
+        watchGeneration++;
+        clearInterval(watchTimer);
+        watchTimer = null;
+        ui?.watch('');
+        if (!arg || arg === 'off') { watchSnapshot = null; ui?.watch(''); if (!silent) out('已关闭执行器观察'); return; }
+        const id = Number(arg.replace(/^T-/i, ''));
+        if (!Number.isSafeInteger(id) || id < 1) throw new Error('用法:/watch <任务号>');
+        const cc = new SidekickApi({ url: ccwebBase(settings.url), alts: (settings.alts || []).map(ccwebBase), token: settings.token, cookie: settings.cookie });
+        const generation = watchGeneration;
+        watchSnapshot = null;
+        let last = '';
+        const seen = new Map();
+        let inFlight = false;
+        const poll = async () => {
+          if (inFlight || closed) return;
+          inFlight = true;
+          try {
+            const { instance, session } = await cc.request('GET', `v1/agents/task?id=${id}`);
+            if (generation !== watchGeneration || closed) return;
+            if (!session) { if (ui) ui.watch(`● T-${id} · 暂无执行器会话`); else if (!last) out(`T-${id} 暂无执行器会话`); last = 'none'; return; }
+            watchSnapshot = { id, instance, session };
+            if (ui) { ui.watch(formatWatch(watchSnapshot, watchExpanded)); return; }
+            const heading = `● T-${id} · ${instance} · ${session.status}`;
+            if (heading !== last) { out(heading); last = heading; }
+            for (const m of session.messages || []) {
+              if (m.role === 'user') continue;
+              for (const [index, p] of (m.parts || []).entries()) {
+                const key = `${session.id}:${m.id}:${index}`;
+                const previous = seen.get(key);
+                const value = JSON.stringify(p);
+                if (previous?.value === value) continue;
+                if (p.type === 'tool') {
+                  const output = p.output || '';
+                  const delta = previous && output.startsWith(previous.output) ? output.slice(previous.output.length) : output;
+                  if (!previous || previous.status !== p.status || previous.title !== p.title) out(`  ⎿ ${p.tool || '工具'}${p.title ? ` · ${p.title}` : ''}${p.status ? ` (${p.status})` : ''}`);
+                  if (delta) out(`    ${delta}`);
+                  seen.set(key, { value, output, status: p.status, title: p.title });
+                } else if (p.type === 'text' && p.text) {
+                  out(`  ${p.text}`);
+                  seen.set(key, { value });
+                }
+              }
+            }
+          } catch (err) { if (generation !== watchGeneration || closed) return; const message = `执行器活动读取失败:${err.message}`; if (ui) ui.watch(`● T-${id} · ${message}`); else if (last !== message) out(message); last = message; }
+          finally { inFlight = false; }
+        };
+        await poll();
+        if (generation !== watchGeneration || closed) return;
+        watchTimer = setInterval(poll, 2000);
+        watchTimer.unref();
+        return;
+      }
       case 'clear':
         if (ui) ui.clear();
         else out('(清屏已跳过:纯文本模式下不动终端)');
@@ -535,6 +644,13 @@ async function startChat(flags) {
   }
 
   const queue = [];
+  let watchTimer = null;
+  let watchGeneration = 0;
+  let watchSnapshot = null;
+  let watchExpanded = false;
+  let taskTimer = null;
+  let taskPolling = false;
+  let hudTasks = [];
   let busy = false;
   async function drain() {
     if (busy) return;
@@ -553,7 +669,17 @@ async function startChat(flags) {
 
   async function sendText(text) {
     const images = pendingImages.slice();
-    const res = await api.send({ conv: convId, text, device: settings.device, ...(images.length ? { images } : {}) });
+    let warned = false;
+    const res = await api.send({ conv: convId, text, device: settings.device, ...(images.length ? { images } : {}) }, {
+      signal: ctl.signal,
+      onRetry: () => {
+        if (!warned) out('消息尚未确认送达，已保留并自动重试，请勿重复发送（退出客户端会停止重试）。');
+        warned = true;
+      },
+    }).catch((err) => {
+      if (!closed) out(`未发送的消息：${text}`);
+      throw err;
+    });
     pendingImages = [];
     ui?.attachments(0);
     latest = Math.max(latest, res.seq);
@@ -564,12 +690,28 @@ async function startChat(flags) {
 
   if (ui) {
     ui.start();
+    const refreshTasks = async () => {
+      if (taskPolling || closed) return;
+      taskPolling = true;
+      try {
+        const result = await api.request('GET', 'v1/tasks?filter=current&fields=title,status,createdAt,startedAt,finishedAt', undefined, { signal: ctl.signal });
+        if (!Array.isArray(result.tasks)) throw new Error('响应缺少任务列表');
+        hudTasks = result.tasks.filter((task) => Number.isSafeInteger(task.id) && task.id > 0);
+        if (!closed) ui.tasks(hudTasks);
+      } catch (err) {
+        if (!closed) ui.tasks(hudTasks, err instanceof Error ? err.message : String(err));
+      } finally { taskPolling = false; }
+    };
+    void refreshTasks();
+    taskTimer = setInterval(refreshTasks, 5000);
+    taskTimer.unref();
   } else {
     rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
     rl.on('line', (line) => {
       const text = line.trim();
       if (!text) return;
       markPresent();
+      if (text === '/quit' || text === '/exit') { shutdown(0); return; }
       queue.push(() => (text.startsWith('/') ? handleSlash(text) : sendText(text)));
       void drain();
     });
@@ -585,6 +727,9 @@ async function startChat(flags) {
     reportSeen();
     typing(false);
     quotas.stop();
+    watchGeneration++;
+    clearInterval(watchTimer);
+    clearInterval(taskTimer);
     ui?.stop();
     ctl.abort();
     try {

@@ -75,7 +75,12 @@ export function createQuotaReader(settings, { api = new SidekickApi(settings), a
     opencode: () => api.request('GET', 'v1/opencode/quota', undefined, { signal: ctl.signal }),
     codex: () => api.request('GET', 'v1/codex/status', undefined, { signal: ctl.signal }),
     claude: () => {
-      ccApi ??= new SidekickApi({ ...settings, url: ccwebBase(settings.url), alt: ccwebBase(settings.alt) });
+      if (!ccApi) {
+        // 每条线路都换成对应的 ccweb 入口;推不出的(自定义地址)跳过,别让额度查询整个失败。
+        const bases = [settings.url, ...(settings.alts ?? (settings.alt ? [settings.alt] : []))]
+          .flatMap((base) => { try { return [ccwebBase(base)]; } catch { return []; } });
+        ccApi = new SidekickApi({ ...settings, url: bases[0], alts: bases.slice(1) });
+      }
       return ccApi.request('GET', 'v1/agents', undefined, { signal: ctl.signal });
     },
   };

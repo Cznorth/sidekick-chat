@@ -42,7 +42,9 @@ node cli/bin/sidekick.mjs
 
 Enter 发送，Shift+Enter 换行（终端需支持；也可用 Ctrl+J），↑/↓ 翻输入历史。回复和忙碌状态更新时保留输入草稿与光标。
 
-复制图片后按 **Ctrl+V** 或输入 **`/paste`**，图片会进入待发送区；可继续输入说明，按 Enter 一起发送。终端如果拦截 Ctrl+V（复制图片时通常不会向程序发出字符），请用 `/paste`。文字仍可用终端的 Ctrl+Shift+V / 右键粘贴。也可以 `/image "D:\图片\截图.png"` 添加文件。每条最多 4 张、每张 6 MB，支持 PNG/JPEG/GIF/WebP；`/drop` 清除待发送图片，`/send [说明]` 发送（纯文本模式用这个命令）。发送失败保留图片，切换会话前须发送或清除。
+复制图片后按 **Ctrl+G** 或输入 **`/paste`**，图片会进入待发送区；可继续输入说明，按 Enter 一起发送。Ctrl+V 也可用，但有些终端会截获它。文字仍可用终端的 Ctrl+Shift+V / 右键粘贴。也可以 `/image "D:\图片\截图.png"` 添加文件。每条最多 4 张、每张 6 MB，支持 PNG/JPEG/GIF/WebP；`/drop` 清除待发送图片，`/send [说明]` 发送（纯文本模式用这个命令）。发送失败保留图片，切换会话前须发送或清除。
+
+消息里的「看全文」会附带 `/open sidekick://task/...` 命令，输入该命令可在 CLI 查看任务消息；旧的 `sidekick://board/...` 链接也支持。
 
 Windows 使用系统剪贴板，无需另装工具；**WSL 里直接读 Windows 的剪贴板**（经 `powershell.exe`，截图、复制的图片都在那边），`/image` 也认 `D:\图片\a.png` 这样的 Windows 路径；macOS 需安装 `pngpaste`，其他 Linux 使用 `wl-clipboard`（Wayland）或 `xclip`（X11）。剪贴板读取发生在运行 CLI 的机器上，SSH 会话可改用 `/image` 读取远端文件。
 
@@ -58,9 +60,18 @@ sidekick login --url http://47.96.64.66:18792 --token <设备令牌>   # 直连 
 ```
 
 - **网页密码**:就是网页版那个 `CORTICO_WEB_PASSWORD`。客户端拿它调站点的 `/api/auth/login`,
-  拿到 `cortico_session` Cookie 存起来,400 天不用重登。服务器地址默认 `https://hkv4.cznorth.cn/chat`。
+  拿到 `cortico_session` Cookie 存起来,400 天不用重登。服务器地址默认 `https://hkv4.cznorth.cn/chat`(香港)。
 - **设备令牌**:部署 `.env` 里的 `SIDEKICK_DEVICE_TOKEN`,和手机 App 用的是同一个。
-  适合备用线路(杭州 `47.96.64.66:18792`)这种没有网页登录接口的直连地址。
+  备用线路没有网页登录接口,要用令牌。
+
+默认线路顺序(主线路连不上或返回 502/503/504 才换,换过去 5 分钟后会先试回主线路):
+
+1. `https://hkv4.cznorth.cn/chat` — 香港主线路
+2. `https://kiro.ch66.top/sk-us/chat` — 美国直连(备用)
+3. `http://47.96.64.66:18792/chat` — 阿里云 frps → 香港 OpenResty → 美国(备用)
+
+用 `--url` 自己指定地址时不会自动加备用线路;要备用就再给 `--alt`(可重复,或逗号分隔),
+也可以写进 `~/.sidekick/config.json` 的 `alts` 数组。`SIDEKICK_ALT` / `SIDEKICK_ALTS` 环境变量同样认。
 
 `sidekick logout` 清掉本机登录态。Cookie 失效时会提示重新 `sidekick login`。
 
@@ -82,6 +93,9 @@ sidekick --device 家里的电脑 "…"   # 换一个署名(默认「终端」)
 | `/conv` | 列出会话(带未读和最后一条摘要) |
 | `/to <序号\|名字>` | 切换会话 |
 | `/history [n]` | 重印最近 n 条,默认 20 |
+| `/watch T-123` | 观察任务执行器的活动；输入框上方显示最近动作和输出，每两秒刷新。`/watch expand` 展开，`/watch collapse` 收起，`/watch off` 关闭；纯文本模式打印更新 |
+  | `Ctrl+T` | 在底部任务 HUD 中用上下键选择任务，回车查看执行器活动；选 main 或按 Esc 返回对话。任务列表每五秒刷新 |
+  | `/open <附件URL>` | 使用 CLI 登录态下载显示的图片或文件，并用系统默认应用打开；保存到本机临时目录并显示路径。浏览器直接打开链接需要已登录的网页会话 |
 | `/who` | 名册:谁在线、谁在忙 |
 | `/usage` | 查询额度，查看剩余比例、采样和重置时间（`/quota` 为兼容别名） |
 | `/clear` | 清屏 |
@@ -99,6 +113,7 @@ sidekick --device 家里的电脑 "…"   # 换一个署名(默认「终端」)
 | 变量 | 作用 |
 |---|---|
 | `SIDEKICK_URL` | 服务器地址,如 `https://hkv4.cznorth.cn/chat` |
+| `SIDEKICK_ALT` / `SIDEKICK_ALTS` | 备用线路,逗号分隔;主线路连不上时按顺序换 |
 | `SIDEKICK_TOKEN` | 设备令牌(Bearer) |
 | `SIDEKICK_PASSWORD` | 网页登录密码(只在 `sidekick login` 时用,不落盘) |
 | `SIDEKICK_COOKIE` | 直接给 `cortico_session` 的值 |
@@ -137,3 +152,5 @@ cd cli && node --test
 
 `test/fake-world.mjs` 起了个假的 chat World(实现上面五个接口),所以鉴权失败、发送、推流补收、
 `sidekick ask` 端到端这些都能脱网验证。
+
+网络断开或发送超时会保留当前消息并自动重试，确认送达后才继续后续发送；重试共用消息编号，服务端按编号去重。重试期间请勿重复输入同一句话。退出客户端会停止重试，尚未送达的消息不会跨进程保存。

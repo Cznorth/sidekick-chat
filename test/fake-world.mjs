@@ -14,6 +14,7 @@ export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botN
   const messages = [];
   const streams = new Set();
   let seq = 0;
+  let agentPolls = 0;
 
   const state = () => ({
     primary,
@@ -47,6 +48,13 @@ export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botN
       res.end(JSON.stringify({ error: 'unauthorized' }));
       return;
     }
+    if (url.pathname === '/ccweb/v1/agents/task') {
+      agentPolls++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ instance: 'Codex', session: { id: 'c1', status: 'running', messages: [{ id: 'live', role: 'assistant', parts: [{ type: 'tool', tool: 'run_command', title: 'echo hi', status: 'running', output: agentPolls > 1 ? 'first\nsecond' : 'first' }] }] } }));
+      return;
+    }
+    if (url.pathname.startsWith('/chat/')) url.pathname = url.pathname.slice(5);
     if (url.pathname === '/v1/team/state') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(state()));

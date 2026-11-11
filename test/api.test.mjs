@@ -6,10 +6,11 @@ import { execFile } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { AuthError, SidekickApi } from '../src/api.mjs';
+import { AuthError, NetworkError, SidekickApi } from '../src/api.mjs';
 import { startFakeWorld } from './fake-world.mjs';
 
 const run = promisify(execFile);
@@ -61,7 +62,7 @@ test('主线路连不上时自动换备用线路', async () => {
   const world = await startFakeWorld();
   try {
     // 1 号端口不会有人监听:模拟国内直连 TLS 被掐的情况。
-    const api = new SidekickApi({ url: 'http://127.0.0.1:1', alt: world.url, token: world.token });
+    const api = new SidekickApi({ url: 'http://127.0.0.1:1', alts: [world.url], token: world.token });
     const state = await api.state();
     assert.equal(state.primary, 'sidekick');
     assert.equal(api.base, world.url);
@@ -70,10 +71,72 @@ test('主线路连不上时自动换备用线路', async () => {
   }
 });
 
+test('前两条线路都不通时换到第三条', async () => {
+  const world = await startFakeWorld();
+  try {
+    const api = new SidekickApi({
+      url: 'http://127.0.0.1:1',
+      alts: ['http://127.0.0.1:2', world.url],
+      token: world.token,
+    });
+    const state = await api.state();
+    assert.equal(state.primary, 'sidekick');
+    assert.equal(api.base, world.url);
+  } finally {
+    await world.close();
+  }
+});
+
+test('备用线路换过去 5 分钟后先试回主线路', () => {
+  let now = 1_000_000;
+  const api = new SidekickApi({
+    url: 'https://primary.test/chat',
+    alts: ['https://us.test/chat', 'https://ali.test/chat'],
+    now: () => now,
+    primaryRetryMs: 5 * 60_000,
+  });
+  // 刚切到第一条备用线路:5 分钟内不回头撞主线路。
+  api.current = 'https://us.test/chat';
+  api.switchedAt = now;
+  assert.deepEqual(api.routeOrder(), ['https://us.test/chat', 'https://ali.test/chat', 'https://primary.test/chat']);
+  now += 5 * 60_000;
+  assert.deepEqual(api.routeOrder(), ['https://primary.test/chat', 'https://us.test/chat', 'https://ali.test/chat']);
+});
+
+test('备用线路持续成功不会推迟重试主线路', async () => {
+  let now = 1000;
+  const api = new SidekickApi({ url: 'http://primary', alts: ['http://backup'], now: () => now, primaryRetryMs: 300 });
+  await api.attempt(async base => { if (base === api.primary) throw new NetworkError('offline'); });
+  now += 200;
+  await api.attempt(async () => {});
+  now += 100;
+  assert.equal(api.routeOrder()[0], api.primary);
+});
+
+test('推流遇到主线路 503 时切到备用线路并接收消息', async () => {
+  const world = await startFakeWorld();
+  const server = createServer((_req, res) => { res.writeHead(503); res.end(); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctl = new AbortController();
+  try {
+    const api = new SidekickApi({ url: `http://127.0.0.1:${server.address().port}`, alts: [world.url], token: world.token });
+    let hello = false;
+    await api.openStream({ after: 0, device: 'test', signal: ctl.signal, onEvent(event) {
+      if (event === 'hello') { hello = true; ctl.abort(); }
+    } }).catch(err => { if (!ctl.signal.aborted) throw err; });
+    assert.equal(hello, true);
+    assert.equal(api.base, world.url);
+  } finally {
+    ctl.abort();
+    await new Promise(resolve => server.close(resolve));
+    await world.close();
+  }
+});
+
 test('备用线路不认网页登录时,提示改用令牌而不是报密码错', async () => {
   const world = await startFakeWorld();
   try {
-    const api = new SidekickApi({ url: 'http://127.0.0.1:1', alt: world.url, cookie: 'stale' });
+    const api = new SidekickApi({ url: 'http://127.0.0.1:1', alts: [world.url], cookie: 'stale' });
     await assert.rejects(
       () => api.state(),
       (err) => err instanceof AuthError && /--token/.test(err.message),
@@ -264,4 +327,51 @@ test('plain CLI renders live activity and exposes it in /who and /conv', async (
     assert.ok(output.split('活动更新测试').length - 1 >= 3);
     assert.ok(!output.includes('\u001b'));
   } finally { await world.close(); }
+});
+
+test('watch receives live task output and does not send commands to chat', async () => {
+  const world = await startFakeWorld();
+  try {
+    const output = await new Promise((resolve, reject) => {
+      let started = false, done = false, text = '';
+      const child = execFile(process.execPath, [BIN, '--plain'], {
+        env: { ...process.env, SIDEKICK_URL: `${world.url}/chat`, SIDEKICK_TOKEN: world.token, SIDEKICK_CONFIG: CONFIG, SIDEKICK_ALTS: '' }, timeout: 9000,
+      }, (err, stdout) => err ? reject(err) : resolve(stdout));
+      child.stdout.on('data', chunk => {
+        text += chunk;
+        if (!started && text.includes('会话:')) { started = true; child.stdin.write('/watch T-42\n'); }
+        if (!done && text.includes('second')) { done = true; child.stdin.write('/watch off\n/quit\n'); }
+      });
+    });
+    assert.match(output, /T-42.*Codex/); assert.match(output, /echo hi/);
+    assert.match(output, /first/); assert.match(output, /second/);
+    assert.equal((await new SidekickApi({ url: world.url, token: world.token }).history('dm:sidekick')).messages.length, 0);
+  } finally { await world.close(); }
+});
+
+test('send retries an unconfirmed message with the same id and payload', async () => {
+  const api = new SidekickApi({ url: 'http://localhost' });
+  const bodies = [];
+  api.request = async (_method, _path, body) => {
+    bodies.push(structuredClone(body));
+    if (bodies.length === 1) throw new NetworkError('timeout');
+    return { seq: 7 };
+  };
+  let warnings = 0;
+  const result = await api.send({ conv: 'dm:sidekick', text: 'keep me', device: 'test', images: [{ data: 'abc' }] }, { onRetry: () => warnings++ });
+  assert.equal(result.seq, 7);
+  assert.equal(warnings, 1);
+  assert.deepEqual(bodies[0], bodies[1]);
+  assert.ok(bodies[0].client_id);
+});
+
+test('send stops retrying on cancellation and never retries auth failures', async () => {
+  const api = new SidekickApi({ url: 'http://localhost' });
+  const ctl = new AbortController();
+  api.request = async () => { throw new NetworkError('offline'); };
+  await assert.rejects(api.send({ text: 'x' }, { signal: ctl.signal, onRetry: () => ctl.abort() }));
+  let calls = 0;
+  api.request = async () => { calls++; throw new AuthError('expired'); };
+  await assert.rejects(api.send({ text: 'x' }), AuthError);
+  assert.equal(calls, 1);
 });
