@@ -89,7 +89,7 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, o
       onTaskClose?.();
       return { consume: true };
     }
-    if (matchesKey(data, 'ctrl+v') && onPasteImage) {
+    if ((matchesKey(data, 'ctrl+v') || matchesKey(data, 'ctrl+g')) && onPasteImage) {
       onPasteImage();
       return { consume: true };
     }

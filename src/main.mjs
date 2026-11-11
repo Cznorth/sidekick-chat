@@ -327,6 +327,7 @@ async function startChat(flags) {
     const options = { bots: state.bots, color, attachmentUrl: (kind, name) => api.attachmentUrl(kind, name) };
     if (ui) ui.message(message, options);
     else out(formatMessage(message, options));
+    for (const link of new Set(String(message.text ?? '').match(/sidekick:\/\/(?:task|board)\/\d+/g) || [])) out(`查看全文：/open ${link}`);
   };
   if (vt) {
     const { createChatUI } = await import('./tui.mjs');
@@ -461,6 +462,19 @@ async function startChat(flags) {
     const arg = rest.join(' ');
     switch (cmd) {
       case 'open': {
+        const card = /^sidekick:\/\/(task|board)\/(\d+)$/.exec(arg);
+        if (card) {
+          let id = Number(card[2]);
+          if (!Number.isSafeInteger(id) || id < 1) throw new Error('无效的任务链接');
+          if (card[1] === 'board') {
+            const { item } = await api.request('GET', `v1/board/item?id=${id}`, undefined, { signal: ctl.signal });
+            id = item?.taskId;
+            if (!Number.isSafeInteger(id) || id < 1) throw new Error('这条消息已撤回或没有关联任务');
+          }
+          const detail = await api.request('GET', `v1/tasks/detail?id=${id}`, undefined, { signal: ctl.signal });
+          out(`任务 T-${id} · ${detail.task?.title || ''}\n${(detail.messages || []).map((message) => message.body || '').filter(Boolean).join('\n\n') || '暂无任务消息'}`);
+          return;
+        }
         if (rest.length === 1 && /^https?:\/\//i.test(rest[0])) {
           const attachment = attachmentFromUrl(api, rest[0]);
           const path = await saveAttachment(api, attachment, { signal: ctl.signal });
@@ -511,7 +525,8 @@ async function startChat(flags) {
           '/watch <任务号>  查看执行器 · /watch expand 展开 · /watch off 关闭',
           'Ctrl+T           键盘选择 HUD 任务，Enter 查看，Esc 返回',
           '/open <附件URL>  下载并用系统应用打开附件',
-          '/paste           添加剪贴板图片（也可 Ctrl+V）',
+          '/open <任务链接> 查看任务全文',
+          '/paste           添加剪贴板图片（也可 Ctrl+G）',
           '/image <路径>    添加图片文件，最多 4 张、每张 6 MB',
           '/send [文字]     发送待发送图片；也可直接输入文字或回车',
           '/drop            清除待发送图片',

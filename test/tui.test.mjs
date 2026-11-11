@@ -39,7 +39,7 @@ test('image paste shortcut preserves text and allows image-only submission', asy
   ui.start();
   try {
     terminal.input('看看');
-    terminal.input('\u0016');
+    terminal.input('\u0007');
     await terminal.flush();
     assert.match(terminal.text(), /待发送图片 1\/4/);
     terminal.input('\r');
