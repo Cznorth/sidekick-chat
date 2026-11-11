@@ -3,7 +3,7 @@ const clean = (s) => String(s ?? '').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '
 const trim = (s, n) => { const v = clean(s); return v.length > n ? `…${v.slice(-n)}` : v; };
 
 export function formatTasks(tasks, { selected = 0, selecting = false, error = '', now = Date.now() } = {}) {
-  const lines = [`${selecting && selected === 0 ? '›' : ' '} main · 当前对话${selecting ? '' : ' · Ctrl+T 选择任务'}`];
+  const lines = [`${selecting && selected === 0 ? '›' : ' '} main · 当前对话${selecting ? '' : ' · ↑↓ 选择任务'}`];
   if (error) lines.push(`  任务列表不可用: ${trim(error.replace(/\s+/g, ' '), 60)}`);
   if (!tasks.length && !error) lines.push('  暂无进行中的任务');
   const first = selecting ? Math.max(0, Math.min(selected - 3, tasks.length - 4)) : 0;
@@ -14,7 +14,7 @@ export function formatTasks(tasks, { selected = 0, selecting = false, error = ''
     const duration = seconds === null ? '' : seconds < 60 ? ` · ${seconds}秒` : ` · ${Math.floor(seconds / 60)}分${seconds % 60}秒`;
     lines.push(`${selecting && selected === first + index + 1 ? '›' : ' '} T-${task.id} · ${trim(String(task.title || '').replace(/\s+/g, ' '), 36)} · ${clean(task.status).replace(/\s+/g, ' ')}${duration}`);
   }
-  if (tasks.length > 4) lines.push(`  共 ${tasks.length} 项${selecting ? '' : '，Ctrl+T 查看全部'}`);
+  if (tasks.length > 4) lines.push(`  共 ${tasks.length} 项`);
   if (selecting) lines.push('  ↑↓ 选择 · Enter 进入 · Esc 返回输入');
   return lines.join('\n');
 }

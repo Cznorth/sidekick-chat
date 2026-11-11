@@ -53,6 +53,40 @@ test('image paste shortcut preserves text and allows image-only submission', asy
   }
 });
 
+test('clicking task links opens the selected card after querying the cursor position', async () => {
+  const terminal = new Terminal();
+  const opened = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit() {}, onQuit() {}, onOpenCard: (uri) => opened.push(uri) });
+  ui.start();
+  try {
+    ui.message({ seq: 1, from: 'bot', ts: 0, text: '结果 [看全文](sidekick://task/915) 和 [旧内容](sidekick://board/42)' }, { bots: [], color: false });
+    await terminal.flush();
+    const screen = terminal.screen.buffer.active;
+    const findRow = (needle) => {
+      for (let y = 0; y < terminal.rows; y++) {
+        if (screen.getLine(screen.viewportY + y)?.translateToString(true).includes(needle)) return y + 1;
+      }
+      throw new Error(`missing ${needle}`);
+    };
+    const click = async (row) => {
+      const cursorRow = screen.cursorY + 1;
+      terminal.input(`\x1b[<0;4;${row}M`);
+      terminal.input(`\x1b[<0;4;${row}m`);
+      terminal.input(`\x1b[${cursorRow};1R`);
+      await terminal.flush();
+    };
+    await click(findRow('[看全文'));
+    await click(findRow('[旧内容'));
+    assert.deepEqual(opened, ['sidekick://task/915', 'sidekick://board/42']);
+    await click(findRow('结果'));
+    assert.equal(opened.length, 2);
+  } finally {
+    ui.stop();
+    await terminal.flush();
+    terminal.screen.dispose();
+  }
+});
+
 test('stream snapshots update in place, finalize once, and preserve the input cursor', async () => {
   const terminal = new Terminal();
   const sent = [];
@@ -232,6 +266,21 @@ test('task HUD supports keyboard selection and preserves the draft', async () =>
     assert.equal(closed, 2);
     terminal.input('继续'); terminal.input('\r');
     assert.deepEqual(sent, ['草稿继续']);
+  } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
+});
+
+test('empty editor arrows enter the always-visible task list', async () => {
+  const terminal = new Terminal();
+  const selected = [];
+  const ui = createChatUI({ color: false, terminal, onSubmit() {}, onQuit() {}, onTaskSelect: (id) => selected.push(id) });
+  ui.start();
+  try {
+    ui.tasks([{ id: 42, title: '修复任务', status: 'running' }, { id: 43, title: '另一个', status: 'waiting' }]);
+    terminal.input('\u001b[B');
+    await terminal.flush();
+    assert.match(terminal.text(), /› T-42/);
+    terminal.input('\r');
+    assert.deepEqual(selected, [42]);
   } finally { ui.stop(); await terminal.flush(); terminal.screen.dispose(); }
 });
 

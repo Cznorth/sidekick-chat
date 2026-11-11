@@ -334,6 +334,7 @@ async function startChat(flags) {
     ui = createChatUI({ color, hasImages: () => pendingImages.length > 0,
       onTaskSelect: (id) => { void handleSlash(`/watch ${id}`, true).catch((err) => out(err.message)); },
       onTaskClose: () => { void handleSlash('/watch off', true).catch((err) => out(err.message)); },
+      onOpenCard: (uri) => { queue.push(() => handleSlash(`/open ${uri}`)); void drain(); },
       onPasteImage: () => { queue.push(async () => addImage(await clipboardImage())); void drain(); },
       onInput: () => markPresent(), onSubmit: (text) => {
       markPresent();

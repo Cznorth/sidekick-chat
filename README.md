@@ -44,7 +44,7 @@ Enter 发送，Shift+Enter 换行（终端需支持；也可用 Ctrl+J），↑/
 
 复制图片后按 **Ctrl+G** 或输入 **`/paste`**，图片会进入待发送区；可继续输入说明，按 Enter 一起发送。Ctrl+V 也可用，但有些终端会截获它。文字仍可用终端的 Ctrl+Shift+V / 右键粘贴。也可以 `/image "D:\图片\截图.png"` 添加文件。每条最多 4 张、每张 6 MB，支持 PNG/JPEG/GIF/WebP；`/drop` 清除待发送图片，`/send [说明]` 发送（纯文本模式用这个命令）。发送失败保留图片，切换会话前须发送或清除。
 
-消息里的「看全文」会附带 `/open sidekick://task/...` 命令，输入该命令可在 CLI 查看任务消息；旧的 `sidekick://board/...` 链接也支持。
+鼠标点击消息下方的「看全文」可在 CLI 查看任务消息，旧的任务链接也支持。也可输入消息附带的 `/open sidekick://task/...` 命令。终端启用鼠标操作期间，按住 Shift 可选择文字或使用终端滚动（具体取决于终端）。
 
 Windows 使用系统剪贴板，无需另装工具；**WSL 里直接读 Windows 的剪贴板**（经 `powershell.exe`，截图、复制的图片都在那边），`/image` 也认 `D:\图片\a.png` 这样的 Windows 路径；macOS 需安装 `pngpaste`，其他 Linux 使用 `wl-clipboard`（Wayland）或 `xclip`（X11）。剪贴板读取发生在运行 CLI 的机器上，SSH 会话可改用 `/image` 读取远端文件。
 

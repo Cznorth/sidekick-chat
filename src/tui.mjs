@@ -1,4 +1,4 @@
-import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
+import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TuiMainScreen, matchesKey, visibleWidth } from '@earendil-works/pi-tui';
 import { paint, formatMessage, attachmentLines } from './format.mjs';
 import { formatTasks } from './watch.mjs';
 
@@ -13,11 +13,32 @@ export function markdownTheme(color) {
 }
 
 /** Pi's renderer owns every screen write, including the editor and busy status. */
-export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, onTaskSelect, onTaskClose, hasImages = () => false, terminal = new ProcessTerminal() }) {
+export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, onOpenCard, onTaskSelect, onTaskClose, hasImages = () => false, terminal = new ProcessTerminal() }) {
   const tui = new TuiMainScreen(terminal);
   const transcript = new Container();
   const live = new Container();
   const drafts = new Map();
+  const cardButtons = new Map();
+  let mouseDown = null;
+  let pendingClick = null;
+  let clickTimer = null;
+  function openClickedCard(x, y, cursorRow) {
+    // DSR gives the real cursor row even when the shell started the TUI mid-screen.
+    // TuiMainScreen's hardwareCursorRow is in document coordinates.
+    const line = tui.hardwareCursorRow + y - cursorRow;
+    let top = 0;
+    for (const component of transcript.children) {
+      const lines = component.render(terminal.columns);
+      const uri = cardButtons.get(component);
+      if (uri && line >= top && line < top + lines.length) {
+        const rendered = lines[line - top].replace(/\x1b\[[0-9;]*m/g, '');
+        const leading = rendered.length - rendered.trimStart().length;
+        if (x >= leading && x < visibleWidth(rendered.trimEnd())) onOpenCard?.(uri);
+        return;
+      }
+      top += lines.length;
+    }
+  }
   const draftKey = (frame) => `${frame.from}:${frame.id}`;
   const dropDraft = (key) => {
     const draft = drafts.get(key);
@@ -58,6 +79,30 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, o
   tui.addChild(attachments);
   tui.setFocus(editor);
   tui.addInputListener((data) => {
+    const cursor = /^\x1b\[(\d+);\d+R$/.exec(data);
+    if (cursor && pendingClick) {
+      const click = pendingClick;
+      pendingClick = null;
+      clearTimeout(clickTimer);
+      openClickedCard(click.x, click.y, Number(cursor[1]) - 1);
+      return { consume: true };
+    }
+    const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+    if (mouse) {
+      const button = Number(mouse[1]);
+      const point = { x: Number(mouse[2]) - 1, y: Number(mouse[3]) - 1 };
+      if (mouse[4] === 'M' && button === 0) mouseDown = point;
+      else if (mouse[4] === 'm') {
+        if (button === 0 && mouseDown?.x === point.x && mouseDown?.y === point.y) {
+          pendingClick = point;
+          clearTimeout(clickTimer);
+          clickTimer = setTimeout(() => { pendingClick = null; }, 1000);
+          terminal.write('\x1b[6n');
+        }
+        mouseDown = null;
+      }
+      return { consume: true };
+    }
     // 任何一个按键都算「人在终端前面」:调用方据此决定要不要把新消息标成已读。
     onInput?.(data);
     if (matchesKey(data, 'ctrl+t')) {
@@ -65,6 +110,23 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, o
       if (selecting) selected = 0;
       renderTasks();
       return { consume: true };
+    }
+    // Claude Code-style task navigation: when the editor is empty, the arrow
+    // keys move focus straight into the always-visible task list. This keeps
+    // the HUD keyboard-first without requiring a shortcut first.
+    if (!selecting && !editor.getText()) {
+      if (matchesKey(data, 'down') && tasks.length) {
+        selecting = true;
+        selected = 1;
+        renderTasks();
+        return { consume: true };
+      }
+      if (matchesKey(data, 'up') && tasks.length) {
+        selecting = true;
+        selected = tasks.length;
+        renderTasks();
+        return { consume: true };
+      }
     }
     if (selecting) {
       if (matchesKey(data, 'escape')) { selecting = false; renderTasks(); return { consume: true }; }
@@ -106,17 +168,27 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, o
     tui.requestRender();
   };
   return {
-    start: () => tui.start(),
-    stop: () => tui.stop(),
+    start() { tui.start(); terminal.write('\x1b[?1000h\x1b[?1006h'); },
+    stop() { clearTimeout(clickTimer); terminal.write('\x1b[?1000l\x1b[?1006l'); tui.stop(); },
     attachments(count) { attachments.setText(count ? `待发送图片 ${count}/4 · Enter 发送 · /drop 清除` : ''); tui.requestRender(); },
     out(text) { transcript.addChild(new Text(text, 1, 0)); tui.requestRender(); },
     message(message, options) {
       if (message.draft) dropDraft(draftKey({ from: message.from, id: message.draft }));
       const header = formatMessage({ ...message, text: '', images: [], files: [] }, options).trimEnd();
       transcript.addChild(new Text(`\n${header}`, 1, 0));
+      const links = [];
+      const body = String(message.text ?? '').replace(/\[([^\]\r\n]{1,80})\]\((sidekick:\/\/(?:task|board)\/\d+)\)/g, (_, label, uri) => {
+        links.push({ label, uri });
+        return '';
+      });
       transcript.addChild(message.from === 'user'
-        ? new Text(String(message.text ?? ''), 2, 0)
-        : new Markdown(String(message.text ?? ''), 2, 0, markdownTheme(color)));
+        ? new Text(body, 2, 0)
+        : new Markdown(body, 2, 0, markdownTheme(color)));
+      for (const { label, uri } of links) {
+        const button = new Text(paint(color, 'cyan', `[${label} · ${uri.split('/').at(-1)}]`), 2, 0);
+        cardButtons.set(button, uri);
+        transcript.addChild(button);
+      }
       for (const line of attachmentLines(message, options)) transcript.addChild(new Text(line, 2, 0));
       tui.requestRender();
     },
@@ -150,6 +222,6 @@ export function createChatUI({ color, onSubmit, onQuit, onInput, onPasteImage, o
     },
     activity(text) { activity.setText(paint(color, 'gray', text)); tui.requestRender(); },
     typing(on) { status.setText(on ? paint(color, 'gray', '… 正在输入') : ''); tui.requestRender(); },
-    clear() { transcript.clear(); drafts.clear(); live.clear(); tui.requestRender(true); },
+    clear() { transcript.clear(); cardButtons.clear(); drafts.clear(); live.clear(); tui.requestRender(true); },
   };
 }
