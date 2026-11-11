@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -100,6 +101,36 @@ test('备用线路换过去 5 分钟后先试回主线路', () => {
   assert.deepEqual(api.routeOrder(), ['https://us.test/chat', 'https://ali.test/chat', 'https://primary.test/chat']);
   now += 5 * 60_000;
   assert.deepEqual(api.routeOrder(), ['https://primary.test/chat', 'https://us.test/chat', 'https://ali.test/chat']);
+});
+
+test('备用线路持续成功不会推迟重试主线路', async () => {
+  let now = 1000;
+  const api = new SidekickApi({ url: 'http://primary', alts: ['http://backup'], now: () => now, primaryRetryMs: 300 });
+  await api.attempt(async base => { if (base === api.primary) throw new NetworkError('offline'); });
+  now += 200;
+  await api.attempt(async () => {});
+  now += 100;
+  assert.equal(api.routeOrder()[0], api.primary);
+});
+
+test('推流遇到主线路 503 时切到备用线路并接收消息', async () => {
+  const world = await startFakeWorld();
+  const server = createServer((_req, res) => { res.writeHead(503); res.end(); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctl = new AbortController();
+  try {
+    const api = new SidekickApi({ url: `http://127.0.0.1:${server.address().port}`, alts: [world.url], token: world.token });
+    let hello = false;
+    await api.openStream({ after: 0, device: 'test', signal: ctl.signal, onEvent(event) {
+      if (event === 'hello') { hello = true; ctl.abort(); }
+    } }).catch(err => { if (!ctl.signal.aborted) throw err; });
+    assert.equal(hello, true);
+    assert.equal(api.base, world.url);
+  } finally {
+    ctl.abort();
+    await new Promise(resolve => server.close(resolve));
+    await world.close();
+  }
 });
 
 test('备用线路不认网页登录时,提示改用令牌而不是报密码错', async () => {

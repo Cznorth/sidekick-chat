@@ -75,8 +75,8 @@ export class SidekickApi {
     for (const base of this.routeOrder()) {
       try {
         const out = await run(base);
+        if (this.current !== base) this.switchedAt = base === this.primary ? 0 : this.now();
         this.current = base;
-        this.switchedAt = base === this.primary ? 0 : this.now();
         return out;
       } catch (err) {
         if (!routeFailed(err)) {
@@ -215,15 +215,22 @@ export class SidekickApi {
   async openStream({ after, device, signal, onEvent, onStatus }) {
     const res = await this.attempt(async (base) => {
       const url = `${base}/v1/team/stream?after=${after}&device=${encodeURIComponent(device || '终端')}`;
-      const r = await fetch(url, {
-        headers: { ...this.headers, accept: 'text/event-stream' },
-        signal,
-      }).catch((err) => {
+      const connect = new AbortController();
+      const timer = setTimeout(() => connect.abort(), REQUEST_TIMEOUT_MS);
+      let r;
+      try {
+        r = await fetch(url, {
+          headers: { ...this.headers, accept: 'text/event-stream' },
+          signal: AbortSignal.any([signal, connect.signal]),
+        });
+      } catch (err) {
+        if (signal.aborted) throw signal.reason;
         throw new NetworkError(networkHint(url, err));
-      });
-      // 4xx / 5xx 不是网络问题,不换线路重试。
+      } finally {
+        clearTimeout(timer);
+      }
       if (r.status === 401) throw new AuthError('登录态已失效');
-      if (!r.ok) throw new Error(`推流 HTTP ${r.status}`);
+      if (!r.ok) throw new HttpError(r.status, `推流 HTTP ${r.status}`);
       return r;
     });
     if (!res.body) throw new Error('推流没有响应体');
