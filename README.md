@@ -122,6 +122,7 @@ sidekick --device 家里的电脑 "…"   # 换一个署名(默认「终端」)
 - 默认开。`sidekick --no-exec`、环境变量 `SIDEKICK_ALLOW_EXEC=0`,或 `~/.sidekick/config.json` 里 `"allowExec": false` 关闭;
   交互里 `/exec off` 只关本次,`/exec on` 再开。CLI 退出后通道消失,不会常驻后台。
 - macOS / Linux / WSL 用 `/bin/sh -lc`,Windows 用 `cmd.exe`;默认超时 60 秒(秘书可给 1–600 秒),单路输出最多回传 64 KB。
+- 执行命令期间每 15 秒报到一次,长命令不会因为暂停取新指令而被误判掉线。
 - 每次执行打印一行「秘书执行」,开始结束都可见;命令、目录、退出码、耗时和一小段输出追加到 `~/.sidekick/exec.log`(权限 600)。
 - 这是你自己的机器和权限。秘书的职责提示词要求它只做你让它做的事;删数据、改系统设置、动登录密钥、`sudo`、对外发消息、花钱要先问你。
   不放心就在启动时加 `--no-exec`。

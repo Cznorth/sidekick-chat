@@ -18,6 +18,8 @@ const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_LOGGED_OUTPUT = 4000;
 /** 服务端一次挂 15 秒;请求本身 20 秒超时,留出余量。 */
 const POLL_WAIT_MS = 15_000;
+/** 执行时不能轮询取活,单独报到以免超过服务端的 45 秒在线窗口。 */
+const HEARTBEAT_MS = 15_000;
 /** 记住最近的回执,服务端重投时原样再回一次,不重复执行。 */
 const CACHE_SIZE = 50;
 
@@ -183,6 +185,7 @@ export function createExecAgent({
   out = () => {},
   logFile = executionLogPath(),
   pollWaitMs = POLL_WAIT_MS,
+  heartbeatMs = HEARTBEAT_MS,
   run = runCommand,
 } = {}) {
   const id = randomUUID();
@@ -220,11 +223,25 @@ export function createExecAgent({
             continue;
           }
           out(`[秘书执行] $ ${firstLine(cmd.command)}`);
-          const result = await run(cmd.command, {
-            cwd: cmd.cwd,
-            timeoutMs: Math.max(1000, Number(cmd.timeoutMs) || 60_000),
-            signal,
-          });
+          let pinging = false;
+          const heartbeat = setInterval(() => {
+            if (pinging || signal.aborted) return;
+            pinging = true;
+            void api.request('POST', 'v1/cli/ping', { agent: meta() }, { signal })
+              .catch(() => {})
+              .finally(() => { pinging = false; });
+          }, heartbeatMs);
+          heartbeat.unref?.();
+          let result;
+          try {
+            result = await run(cmd.command, {
+              cwd: cmd.cwd,
+              timeoutMs: Math.max(1000, Number(cmd.timeoutMs) || 60_000),
+              signal,
+            });
+          } finally {
+            clearInterval(heartbeat);
+          }
           const payload = {
             ok: result.ok === true,
             exitCode: result.exitCode ?? null,

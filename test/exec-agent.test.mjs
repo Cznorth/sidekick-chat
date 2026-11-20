@@ -139,3 +139,83 @@ test('exec agent stops polling when disabled', async () => {
   assert.ok(polls <= after + 1, `polls kept going: ${after} -> ${polls}`);
   assert.equal(agent.enabled, false);
 });
+
+test('exec agent heartbeats during commands without overlapping requests and stops on disable', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sidekick-agent-heartbeat-'));
+  let polls = 0;
+  const pings = [];
+  let releasePing;
+  let finishRun;
+  let resultPosted = false;
+  const api = {
+    async request(_method, path, body) {
+      if (path === 'v1/cli/poll') {
+        polls += 1;
+        if (polls === 1) return { commands: [{ id: 'long-1', command: 'long command', timeoutMs: 60_000 }] };
+        await sleep(10);
+        return { commands: [] };
+      }
+      if (path === 'v1/cli/ping') {
+        pings.push(body);
+        // 模拟慢网络:未完成的报到不能重叠。
+        if (pings.length === 1) await new Promise(resolve => { releasePing = resolve; });
+        return { ok: true };
+      }
+      if (path === 'v1/cli/result') { resultPosted = true; return { ok: true }; }
+      throw new Error(`unexpected ${path}`);
+    },
+  };
+  const agent = createExecAgent({ api, heartbeatMs: 10, logFile: join(dir, 'exec.log'),
+    run: () => new Promise(resolve => { finishRun = resolve; }),
+  });
+  try {
+    agent.start();
+    await waitFor(() => pings.length === 1);
+    assert.equal(pings[0].agent.id, agent.id);
+    assert.equal(pings[0].agent.allowExec, true);
+    await sleep(40);
+    assert.equal(pings.length, 1);
+    releasePing();
+    await waitFor(() => pings.length >= 2);
+    finishRun({ ok: true, exitCode: 0, stdout: 'done', stderr: '', durationMs: 60 });
+    await waitFor(() => resultPosted);
+    const afterRun = pings.length;
+    await sleep(40);
+    assert.equal(pings.length, afterRun, 'heartbeats continued after command completion');
+    agent.disable();
+    await sleep(40);
+    assert.equal(pings.length, afterRun, 'heartbeats continued after disable');
+  } finally {
+    releasePing?.();
+    finishRun?.({ ok: false, exitCode: null, stdout: '', stderr: '' });
+    agent.stop();
+  }
+});
+
+test('exec agent stops command heartbeats when an active command is aborted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sidekick-agent-abort-'));
+  let pings = 0;
+  const api = {
+    async request(_method, path) {
+      if (path === 'v1/cli/poll') return { commands: [{ id: 'abort-1', command: 'long command', timeoutMs: 60_000 }] };
+      if (path === 'v1/cli/ping') { pings += 1; return { ok: true }; }
+      return { ok: true };
+    },
+  };
+  const agent = createExecAgent({ api, heartbeatMs: 10, logFile: join(dir, 'exec.log'),
+    run: (_command, { signal }) => new Promise(resolve => {
+      signal.addEventListener('abort', () => resolve({ ok: false, exitCode: null, stdout: '', stderr: '', error: 'interrupted' }), { once: true });
+    }),
+  });
+  try {
+    agent.start();
+    await waitFor(() => pings >= 2);
+    agent.disable();
+    const after = pings;
+    await sleep(50);
+    assert.equal(pings, after);
+    await waitFor(() => !agent.running);
+  } finally {
+    agent.stop();
+  }
+});
