@@ -3,6 +3,7 @@
  * 行为照 packages/world-chat/src/world.ts,好让客户端能脱网跑。
  */
 import { createServer } from 'node:http';
+import { listenSafe } from './listen.mjs';
 
 export const TOKEN = 'test-token';
 
@@ -105,7 +106,7 @@ export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botN
     res.end(JSON.stringify({ error: 'not found' }));
   });
 
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await listenSafe(server);
   const { port } = server.address();
   return {
     url: `http://127.0.0.1:${port}`,

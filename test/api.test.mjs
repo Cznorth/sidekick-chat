@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { AuthError, NetworkError, SidekickApi } from '../src/api.mjs';
 import { startFakeWorld } from './fake-world.mjs';
+import { listenSafe } from './listen.mjs';
 
 const run = promisify(execFile);
 const BIN = fileURLToPath(new URL('../bin/sidekick.mjs', import.meta.url));
@@ -116,7 +117,7 @@ test('备用线路持续成功不会推迟重试主线路', async () => {
 test('推流遇到主线路 503 时切到备用线路并接收消息', async () => {
   const world = await startFakeWorld();
   const server = createServer((_req, res) => { res.writeHead(503); res.end(); });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenSafe(server);
   const ctl = new AbortController();
   try {
     const api = new SidekickApi({ url: `http://127.0.0.1:${server.address().port}`, alts: [world.url], token: world.token });

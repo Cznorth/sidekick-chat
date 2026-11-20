@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { SidekickApi } from '../src/api.mjs';
 import { attachmentFromUrl, messageAttachments, saveAttachment } from '../src/attachments.mjs';
 import { formatMessage, plainMessage } from '../src/format.mjs';
+import { listenSafe } from './listen.mjs';
 
 test('图片和文件显示不含凭据的 URL，纯文本也显示', () => {
   const message = { seq: 42, from: 'bot', ts: 0, text: '', images: ['x.png'], files: [{ name: 'f.pdf', title: '报告.pdf' }] };
@@ -33,7 +34,7 @@ test('附件下载携带鉴权且保存到安全文件名', async () => {
     assert.equal(req.url, '/v1/team/file?name=a%20b.pdf');
     res.end('test data');
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await listenSafe(server);
   const api = new SidekickApi({ url: `http://127.0.0.1:${server.address().port}`, token: 'secret' });
   let path;
   try {

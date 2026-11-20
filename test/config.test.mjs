@@ -4,6 +4,8 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   DEFAULT_ALTS,
   DEFAULT_URL,
@@ -12,6 +14,10 @@ import {
   resolveSettings,
   upgradeSavedAlts,
 } from '../src/config.mjs';
+
+// 别读到本机真实的 ~/.sidekick/config.json 和 SIDEKICK_* 环境变量:里面存的旧备用线路会被升级成默认线路。
+process.env.SIDEKICK_CONFIG = join(tmpdir(), `sidekick-config-test-${process.pid}-absent.json`);
+for (const key of ['SIDEKICK_URL', 'SIDEKICK_ALT', 'SIDEKICK_ALTS']) delete process.env[key];
 
 test('默认主线路自动带两条备用线路', () => {
   assert.deepEqual(defaultAltsFor(DEFAULT_URL), DEFAULT_ALTS);

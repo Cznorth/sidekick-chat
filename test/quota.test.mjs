@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { ccwebBase, createQuotaReader, formatQuota, quotaRows } from '../src/quota.mjs';
+import { listenSafe } from './listen.mjs';
 
 test('ccweb URL preserves the host and proxy prefix, and maps the direct port', () => {
   assert.equal(ccwebBase('https://example.test/chat/'), 'https://example.test/ccweb');
@@ -44,7 +45,7 @@ test('on-demand quota query uses existing authenticated routes, preserves good s
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify(body));
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await listenSafe(server);
   const monitor = createQuotaReader({ url: `http://127.0.0.1:${server.address().port}/chat`, token: 'synthetic-token' });
   try {
     const first = monitor.refresh();

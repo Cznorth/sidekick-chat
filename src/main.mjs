@@ -33,6 +33,7 @@ import { ccwebBase, createQuotaReader, formatQuota } from './quota.mjs';
 import { clipboardImage, imageFile } from './images.mjs';
 import { formatActivity, applyActivity } from './activity.mjs';
 import { formatWatch } from './watch.mjs';
+import { checkForUpdate, newerCachedVersion, ownVersion } from './update.mjs';
 import { attachmentFromUrl, messageAttachments, openAttachment, saveAttachment } from './attachments.mjs';
 
 const PACKAGE_VERSION = (() => {
@@ -52,6 +53,7 @@ const HELP = `Sidekick 终端客户端 ${PACKAGE_VERSION}
   sidekick ask --wait 20 "…"   同上,收到第一条后最多再等 20 秒后续消息
   sidekick login               登录(网页密码或设备令牌)
   sidekick logout              删掉本机保存的登录态
+  sidekick update              立刻检查并下载新版(下次启动生效)
   sidekick help                这份说明
 
 参数:
@@ -66,13 +68,14 @@ const HELP = `Sidekick 终端客户端 ${PACKAGE_VERSION}
   --json            一次性模式:每条消息输出一行 JSON
   --no-color        不上色
   --plain           纯文本:不上色、不重画输入行(老终端/管道/日志里用)
+  --no-update       这次不检查更新(也可设 SIDEKICK_NO_UPDATE=1)
   -h, --help        这份说明
   -v, --version     版本
 
 进交互后可用 /help 看命令,/conv 列会话,/to 切换,Ctrl-C 退出。
 
 环境变量(优先于配置文件):SIDEKICK_URL、SIDEKICK_ALT / SIDEKICK_ALTS、SIDEKICK_TOKEN、SIDEKICK_PASSWORD、SIDEKICK_DEVICE、SIDEKICK_COOKIE。
-配置放在 ${configPath()}(权限 600)。`;
+SIDEKICK_NO_UPDATE=1 关掉自动升级。配置放在 ${configPath()}(权限 600)。`;
 
 /** 命令行参数解析:node 自带的 parseArgs,不引第三方依赖。 */
 function parseFlags(argv) {
@@ -102,6 +105,10 @@ function parseFlags(argv) {
     }
     if (arg === '--plain') {
       flags.plain = true;
+      continue;
+    }
+    if (arg === '--no-update') {
+      flags.noUpdate = true;
       continue;
     }
     if (arg.startsWith('--')) {
@@ -334,7 +341,6 @@ async function startChat(flags) {
     ui = createChatUI({ color, hasImages: () => pendingImages.length > 0,
       onTaskSelect: (id) => { void handleSlash(`/watch ${id}`, true).catch((err) => out(err.message)); },
       onTaskClose: () => { void handleSlash('/watch off', true).catch((err) => out(err.message)); },
-      onOpenCard: (uri) => { queue.push(() => handleSlash(`/open ${uri}`)); void drain(); },
       onPasteImage: () => { queue.push(async () => addImage(await clipboardImage())); void drain(); },
       onInput: () => markPresent(), onSubmit: (text) => {
       markPresent();
@@ -523,6 +529,7 @@ async function startChat(flags) {
           '/who             名册、连接状态和上下文用量',
           '/context         当前会话各助理的上下文用量和预算',
           '/usage           查询额度，查看剩余比例和重置时间',
+          '/update          检查并下载新版，下次启动生效',
           '/watch <任务号>  查看执行器 · /watch expand 展开 · /watch off 关闭',
           'Ctrl+T           键盘选择 HUD 任务，Enter 查看，Esc 返回',
           '/open <附件URL>  下载并用系统应用打开附件',
@@ -572,6 +579,18 @@ async function startChat(flags) {
       case 'context':
         out(state.bots.filter(b => convOf(convId)?.members.includes(b.id)).map(b => `${b.name}: ${formatContext(b)}`).join('\n') || '当前会话没有助理');
         return;
+      case 'update': {
+        const current = ownVersion();
+        try {
+          const result = await checkForUpdate({ force: true });
+          if (result.status === 'busy') out('正在后台检查更新,请稍后再试');
+          else {
+            const next = result.installed || newerCachedVersion(current)?.version;
+            out(next && result.status !== 'current' ? `新版本 ${next} 已下载,下次启动生效(当前 ${current})` : `已是最新版本 ${current}`);
+          }
+        } catch (err) { out(`检查更新失败:${err.message}`); }
+        return;
+      }
       case 'usage':
       case 'quota':
         out(formatQuota(await quotas.refresh(), { detail: true }));
@@ -747,6 +766,26 @@ async function startChat(flags) {
   }
 }
 
+/** `sidekick update`:立刻查一次并下载,下一次启动用新版。 */
+async function updateCommand() {
+  const current = ownVersion();
+  try {
+    const result = await checkForUpdate({ force: true });
+    if (result.status === 'busy') {
+      stdout(`正在后台检查更新,请稍后再运行 sidekick update(当前 ${current})`);
+      return;
+    }
+    const next = result.installed || newerCachedVersion(current)?.version;
+    if (next && result.status !== 'current') {
+      stdout(`新版本 ${next} 已下载,下次启动生效(当前 ${current})`);
+      return;
+    }
+    stdout(`已是最新版本 ${current}`);
+  } catch (err) {
+    fail(`检查更新失败:${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export async function run(argv = process.argv.slice(2)) {
   let flags;
   try {
@@ -785,6 +824,10 @@ export async function run(argv = process.argv.slice(2)) {
     if (command === 'logout') {
       clearConfig();
       stdout(`已经删掉本机保存的登录态(${configPath()})`);
+      return;
+    }
+    if (command === 'update') {
+      await updateCommand();
       return;
     }
     if (command === 'ask') {

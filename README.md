@@ -34,6 +34,16 @@ npm i -g sidekick-chat     # 或者装到全局,命令就是 sidekick
 node cli/bin/sidekick.mjs
 ```
 
+0.3.0 起会在启动时自动升级:最多每 6 小时去 npm registry 查一次,有新版就悄悄下载、
+校验后解到 `~/.sidekick/cli/<版本>/`,**下一次启动**自动改用新版,不挡当前这一轮。
+全局安装、`npx` 缓存、只读的全局目录都一样,Windows / WSL / macOS 通用。
+下载失败只写 `~/.sidekick/cli/update.log`,不影响正常使用。
+
+- `sidekick update` 或交互里输入 `/update`:立刻检查并下载,下次启动生效。
+- `--no-update` 或 `SIDEKICK_NO_UPDATE=1`:这次不检查、也不切到已下载的新版。
+- 0.3.0 之前的版本还没有这段代码,需要手动 `npm i -g sidekick-chat@latest`
+  (或 `npx sidekick-chat@latest`)升级一次,之后就会自动跟上。
+
 0.2.3 起，输入 `/usage` 时才查询并显示 OpenCode、Codex、Claude WSL 和 Claude Docker 的剩余额度、采样及重置时间。没有常驻 HUD，也不在后台自动刷新。`/quota` 是兼容别名，纯文本交互也支持。刷新失败保留上次查询值并标注，无数据时显示未知。额度沿用 App 的接口，不需要在 CLI 配置模型 API key。
 
 0.2.1 起，交互界面实时显示服务器的流式回复草稿，支持生成中的 Markdown；正式消息到达后替换草稿，不重复显示。切换会话、断线、清屏或服务端撤回会清除临时草稿。草稿不落盘，重连只补正式消息。`--plain`、管道、一次性 `ask` 和 `--json` 只输出正式消息。
@@ -44,7 +54,7 @@ Enter 发送，Shift+Enter 换行（终端需支持；也可用 Ctrl+J），↑/
 
 复制图片后按 **Ctrl+G** 或输入 **`/paste`**，图片会进入待发送区；可继续输入说明，按 Enter 一起发送。Ctrl+V 也可用，但有些终端会截获它。文字仍可用终端的 Ctrl+Shift+V / 右键粘贴。也可以 `/image "D:\图片\截图.png"` 添加文件。每条最多 4 张、每张 6 MB，支持 PNG/JPEG/GIF/WebP；`/drop` 清除待发送图片，`/send [说明]` 发送（纯文本模式用这个命令）。发送失败保留图片，切换会话前须发送或清除。
 
-鼠标点击消息下方的「看全文」可在 CLI 查看任务消息，旧的任务链接也支持。也可输入消息附带的 `/open sidekick://task/...` 命令。终端启用鼠标操作期间，按住 Shift 可选择文字或使用终端滚动（具体取决于终端）。
+消息里的「看全文」会附带 `/open sidekick://task/...` 命令，输入该命令可在 CLI 查看任务消息；旧的 `sidekick://board/...` 链接也支持。
 
 Windows 使用系统剪贴板，无需另装工具；**WSL 里直接读 Windows 的剪贴板**（经 `powershell.exe`，截图、复制的图片都在那边），`/image` 也认 `D:\图片\a.png` 这样的 Windows 路径；macOS 需安装 `pngpaste`，其他 Linux 使用 `wl-clipboard`（Wayland）或 `xclip`（X11）。剪贴板读取发生在运行 CLI 的机器上，SSH 会话可改用 `/image` 读取远端文件。
 
@@ -119,6 +129,7 @@ sidekick --device 家里的电脑 "…"   # 换一个署名(默认「终端」)
 | `SIDEKICK_COOKIE` | 直接给 `cortico_session` 的值 |
 | `SIDEKICK_DEVICE` | 这台机器的署名 |
 | `SIDEKICK_CONFIG` | 配置文件路径,默认 `~/.sidekick/config.json` |
+| `SIDEKICK_NO_UPDATE` | 设成 `1` 就不自动升级,也不用已下载的新版 |
 | `NO_COLOR` | 设了就不上色 |
 
 ## 怎么实现的
@@ -134,8 +145,10 @@ sidekick --device 家里的电脑 "…"   # 换一个署名(默认「终端」)
 | `GET /v1/team/stream?after=` | SSE 推流:消息、正在输入、连接状态 |
 
 ```
-bin/sidekick.mjs   入口,把参数交给 src/main.mjs
-src/main.mjs       login / logout / ask / 交互三种流程
+bin/sidekick.mjs   入口,先切到已下载的新版(如有),再交给 src/main.mjs
+src/main.mjs       login / logout / update / ask / 交互三种流程
+src/update.mjs     查 npm registry、校验、解压到 ~/.sidekick/cli,下次启动生效
+src/update-worker.mjs  启动时拉起的后台更新进程
 src/api.mjs        接口调用与 SSE 解析,断线按 1s→30s 退避重连,重连时带 seq 补收
 src/config.mjs     ~/.sidekick/config.json 读写,参数 > 环境变量 > 配置文件的优先级
 src/format.mjs     纯文本消息排版(纯函数)
