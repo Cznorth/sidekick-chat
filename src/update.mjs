@@ -365,11 +365,23 @@ function extractWithNpm(version, tempRoot) {
   return join(prefix, 'node_modules', PACKAGE_NAME);
 }
 
+async function fetchTarball(url) {
+  const options = { signal: AbortSignal.timeout(60_000), headers: { 'cache-control': 'no-cache' } };
+  let response = await fetch(url, options);
+  // 刚发布的包,Cloudflare 可能先把 tarball 的 404 缓存住;带个参数绕开缓存再试一次。
+  if (response.status === 404) {
+    const retry = new URL(url);
+    retry.searchParams.set('sidekick-update', String(Date.now()));
+    response = await fetch(retry, options);
+  }
+  return response;
+}
+
 async function downloadUpdate(meta) {
   const tempRoot = join(updateDir(), `.tmp-${process.pid}-${Date.now()}`);
   mkdirSync(tempRoot, { recursive: true });
   try {
-    const response = await fetch(meta.tarball, { signal: AbortSignal.timeout(60_000) });
+    const response = await fetchTarball(meta.tarball);
     if (!response.ok) throw new Error(`下载更新失败:npm registry 返回 ${response.status}`);
     const bytes = Buffer.from(await response.arrayBuffer());
     if (bytes.length > MAX_TARBALL_BYTES) throw new Error('更新包太大,拒绝下载');

@@ -53,7 +53,8 @@ function makeTarball(version) {
   return readFileSync(archive);
 }
 
-async function fakeRegistry({ version, tarball, integrity }) {
+async function fakeRegistry({ version, tarball, integrity, failFirstTarball = false }) {
+  let tarballHits = 0;
   const server = createServer((req, res) => {
     if (req.url === '/sidekick-chat/latest') {
       res.setHeader('content-type', 'application/json');
@@ -64,7 +65,13 @@ async function fakeRegistry({ version, tarball, integrity }) {
       }));
       return;
     }
-    if (req.url === '/package.tgz') {
+    if (req.url.startsWith('/package.tgz')) {
+      tarballHits += 1;
+      if (failFirstTarball && tarballHits === 1) {
+        res.statusCode = 404;
+        res.end('not yet');
+        return;
+      }
       res.setHeader('content-type', 'application/octet-stream');
       res.end(tarball);
       return;
@@ -115,6 +122,22 @@ test('查到新版后下载、校验、解压;之后启动能挑到它', async (
     assert.equal(newerCachedVersion('0.3.0').version, '9.9.9');
     assert.equal(JSON.parse(readFileSync(join(root, '9.9.9', 'package.json'), 'utf8')).version, '9.9.9');
     assert.equal(readUpdateState().latest, '9.9.9');
+  } finally {
+    server.close();
+  }
+});
+
+test('tarball 被 CDN 缓存成 404 时带参数重试', async () => {
+  const root = tempDir();
+  process.env.SIDEKICK_UPDATE_DIR = root;
+  const tarball = makeTarball('9.9.9');
+  const integrity = `sha512-${createHash('sha512').update(tarball).digest('base64')}`;
+  const { server, url } = await fakeRegistry({ version: '9.9.9', tarball, integrity, failFirstTarball: true });
+  process.env.SIDEKICK_REGISTRY = url;
+  try {
+    const result = await checkForUpdate({ force: true });
+    assert.equal(result.status, 'installed');
+    assert.equal(newerCachedVersion('0.3.0').version, '9.9.9');
   } finally {
     server.close();
   }
