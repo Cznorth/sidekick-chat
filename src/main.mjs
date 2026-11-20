@@ -35,6 +35,7 @@ import { formatActivity, applyActivity } from './activity.mjs';
 import { formatWatch } from './watch.mjs';
 import { checkForUpdate, newerCachedVersion, ownVersion } from './update.mjs';
 import { attachmentFromUrl, messageAttachments, openAttachment, saveAttachment } from './attachments.mjs';
+import { createExecAgent, executionLogPath } from './exec-agent.mjs';
 
 const PACKAGE_VERSION = (() => {
   try {
@@ -64,6 +65,7 @@ const HELP = `Sidekick 终端客户端 ${PACKAGE_VERSION}
   --password <密码> 网页登录密码(不给就在终端里问)
   --conv <会话>     指定会话:id、名字或 /conv 列表里的序号,默认和秘书的私聊
   --device <名字>   这台机器的署名,默认「终端」
+  --no-exec         不让秘书在这台机器上执行命令(默认允许;进交互后 /exec off 也能关)
   --wait <秒>       一次性模式:收到第一条后再等多久算说完,默认 6
   --json            一次性模式:每条消息输出一行 JSON
   --no-color        不上色
@@ -73,8 +75,9 @@ const HELP = `Sidekick 终端客户端 ${PACKAGE_VERSION}
   -v, --version     版本
 
 进交互后可用 /help 看命令,/conv 列会话,/to 切换,Ctrl-C 退出。
+交互模式默认让秘书在这台机器上执行命令(装服务、写配置、查路径),命令和退出码记在 ~/.sidekick/exec.log;/exec off 关。
 
-环境变量(优先于配置文件):SIDEKICK_URL、SIDEKICK_ALT / SIDEKICK_ALTS、SIDEKICK_TOKEN、SIDEKICK_PASSWORD、SIDEKICK_DEVICE、SIDEKICK_COOKIE。
+环境变量(优先于配置文件):SIDEKICK_URL、SIDEKICK_ALT / SIDEKICK_ALTS、SIDEKICK_TOKEN、SIDEKICK_PASSWORD、SIDEKICK_DEVICE、SIDEKICK_COOKIE、SIDEKICK_ALLOW_EXEC。
 SIDEKICK_NO_UPDATE=1 关掉自动升级。配置放在 ${configPath()}(权限 600)。`;
 
 /** 命令行参数解析:node 自带的 parseArgs,不引第三方依赖。 */
@@ -109,6 +112,10 @@ function parseFlags(argv) {
     }
     if (arg === '--no-update') {
       flags.noUpdate = true;
+      continue;
+    }
+    if (arg === '--no-exec') {
+      flags.noExec = true;
       continue;
     }
     if (arg.startsWith('--')) {
@@ -383,6 +390,17 @@ async function startChat(flags) {
   await printHistory(30);
   drawActivity();
 
+  // 交互模式才开执行通道:窗口关了就不再常驻。默认开,关掉后秘书的工具会回「没有 CLI 在线」。
+  const execAgent = settings.allowExec
+    ? createExecAgent({ api, name: settings.device, version: PACKAGE_VERSION, enabled: true, out })
+    : null;
+  if (execAgent) {
+    execAgent.start();
+    out(paint(color, 'gray', `本机执行:开(秘书可在这台机器上跑命令)· /exec 查看或关闭 · 日志 ${executionLogPath()}`));
+  } else {
+    out(paint(color, 'gray', '本机执行:关(--no-exec 或配置 allowExec:false)'));
+  }
+
   function applyState(next) {
     if (!next) return;
     state = next;
@@ -538,6 +556,7 @@ async function startChat(flags) {
           '/image <路径>    添加图片文件，最多 4 张、每张 6 MB',
           '/send [文字]     发送待发送图片；也可直接输入文字或回车',
           '/drop            清除待发送图片',
+          '/exec [on|off]   秘书能否在这台机器上执行命令;log 看最近几次',
           '/clear           清屏',
           '/quit            退出(也可以 Ctrl-C)',
           '直接输入文字就是发给当前会话。',
@@ -654,6 +673,39 @@ async function startChat(flags) {
         watchTimer.unref();
         return;
       }
+      case 'exec': {
+        if (!execAgent) {
+          out('本机执行已关闭(--no-exec 或配置 allowExec:false);去掉它们重启 sidekick 才会开。');
+          return;
+        }
+        if (arg === 'off') {
+          execAgent.disable();
+          out('已关闭:秘书不能再在这台机器上执行命令(本次会话)');
+          return;
+        }
+        if (arg === 'on') {
+          execAgent.enable();
+          out('已开启:秘书可以在这台机器上执行命令');
+          return;
+        }
+        if (arg === 'log') {
+          let lines = [];
+          try { lines = readFileSync(executionLogPath(), 'utf8').trim().split(/\r?\n/).filter(Boolean).slice(-5); } catch { /* 还没有日志 */ }
+          if (!lines.length) { out('还没有执行记录'); return; }
+          for (const line of lines) {
+            try {
+              const e = JSON.parse(line);
+              out(`${e.ts ? new Date(e.ts).toLocaleString() : ''} · exit ${e.exitCode ?? '?'} · ${e.cwd || ''}\n  $ ${oneLine(e.command, 300)}`);
+            } catch {
+              out(oneLine(line, 300));
+            }
+          }
+          return;
+        }
+        if (arg && arg !== 'status') throw new Error('用法:/exec [on|off|status|log]');
+        out(`本机执行:${execAgent.enabled ? '开' : '关'} · 日志 ${executionLogPath()}`);
+        return;
+      }
       case 'clear':
         if (ui) ui.clear();
         else out('(清屏已跳过:纯文本模式下不动终端)');
@@ -746,6 +798,7 @@ async function startChat(flags) {
     closed = true;
     reportSeen();
     typing(false);
+    execAgent?.stop();
     quotas.stop();
     watchGeneration++;
     clearInterval(watchTimer);

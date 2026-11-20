@@ -42,3 +42,15 @@ test('--alt 可重复、也可逗号分隔,去重后保持顺序', () => {
   assert.deepEqual(settings.alts, ['https://one.test', 'https://two.test']);
   assert.equal(settings.alt, 'https://one.test');
 });
+
+test('本机执行默认开,\u2014\u2014no-exec 和环境变量能关', () => {
+  delete process.env.SIDEKICK_ALLOW_EXEC;
+  assert.equal(resolveSettings({}).allowExec, true);
+  assert.equal(resolveSettings({ noExec: true }).allowExec, false);
+  process.env.SIDEKICK_ALLOW_EXEC = '0';
+  assert.equal(resolveSettings({}).allowExec, false);
+  assert.equal(resolveSettings({ noExec: false }).allowExec, false);
+  process.env.SIDEKICK_ALLOW_EXEC = 'yes';
+  assert.equal(resolveSettings({}).allowExec, true);
+  delete process.env.SIDEKICK_ALLOW_EXEC;
+});

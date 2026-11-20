@@ -63,6 +63,11 @@ export function resolveSettings(flags = {}) {
   const token = String(flags.token || process.env.SIDEKICK_TOKEN || saved.token || '').trim();
   const cookie = String(process.env.SIDEKICK_COOKIE || saved.cookie || '').trim();
   const device = String(flags.device || process.env.SIDEKICK_DEVICE || saved.device || '终端').trim();
+  // 秘书能不能在这台机器上跑命令:默认开;`--no-exec`、SIDEKICK_ALLOW_EXEC=0 或配置 allowExec:false 关。
+  const rawExec = flags.noExec ? '0' : process.env.SIDEKICK_ALLOW_EXEC ?? saved.allowExec;
+  const allowExec = rawExec === undefined || rawExec === null
+    ? true
+    : !/^(?:0|false|off|no)$/i.test(String(rawExec).trim());
   return {
     url: stripTrailingSlash(url),
     /** 旧代码只认单条备用线路,保留第一个。 */
@@ -71,6 +76,7 @@ export function resolveSettings(flags = {}) {
     token,
     cookie,
     device,
+    allowExec,
     conv: flags.conv || saved.conv || '',
     loggedIn: Boolean(token || cookie),
     saved,
