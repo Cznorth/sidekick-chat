@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -272,6 +273,72 @@ function readPackage(dir) {
   return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
 }
 
+/** 用 npm 把 package.json 里的生产依赖装进缓存目录,不然交互界面会找不到 pi-tui。 */
+function installDependencies(dir) {
+  const args = [
+    'install',
+    '--prefix', dir,
+    '--omit=dev',
+    '--ignore-scripts',
+    '--no-save',
+    '--no-package-lock',
+    '--no-audit',
+    '--no-fund',
+    '--registry', registryUrl(),
+  ];
+  const execPath = process.env.npm_execpath;
+  const result = execPath
+    ? spawnSync(process.execPath, [execPath, ...args], { encoding: 'utf8', windowsHide: true })
+    : spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {
+      encoding: 'utf8',
+      windowsHide: true,
+      shell: process.platform === 'win32',
+    });
+  if (result.error || result.status !== 0) {
+    throw new Error(`安装更新依赖失败:${result.error?.message || (result.stderr || '').trim() || `退出码 ${result.status}`}`);
+  }
+}
+
+function missingDependencies(dir, pkg) {
+  const optional = new Set(Object.keys(pkg.optionalDependencies || {}));
+  return Object.keys(pkg.dependencies || {}).filter((name) => {
+    if (optional.has(name)) return false;
+    return !existsSync(join(dir, 'node_modules', name, 'package.json'));
+  });
+}
+
+function verifyDependencies(dir, pkg) {
+  const missing = missingDependencies(dir, pkg);
+  if (missing.length) throw new Error(`更新包缺少依赖 ${missing.join(', ')}`);
+}
+
+/**
+ * 补齐当前这份代码自己的生产依赖。
+ *
+ * 0.3.0 的更新器只会解包、不会装依赖,它下出来的 0.3.1 第一次启动时靠这里补;
+ * 以后新版本由新版更新器直接装好,这里通常一次就过。
+ */
+export function ensureOwnDependencies() {
+  const dir = ownPackageDir();
+  let pkg;
+  try {
+    pkg = readPackage(dir);
+  } catch {
+    return false;
+  }
+  const missing = missingDependencies(dir, pkg);
+  if (!missing.length) return true;
+  try {
+    installDependencies(dir);
+    verifyDependencies(dir, pkg);
+    logUpdate(`已补齐依赖:${missing.join(', ')}`);
+    return true;
+  } catch (err) {
+    logUpdate(`补齐依赖失败:${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
 function extractWithNpm(version, tempRoot) {
   const prefix = join(tempRoot, 'npm');
   const args = [
@@ -324,10 +391,21 @@ async function downloadUpdate(meta) {
       throw new Error(`下载到的包不对:${pkg.name}@${pkg.version}`);
     }
     if (!existsSync(join(packageDir, 'bin', 'sidekick.mjs'))) throw new Error('更新包里没有 bin/sidekick.mjs');
+    if (!existsSync(join(packageDir, 'src', 'update.mjs')) || !existsSync(join(packageDir, 'src', 'update-worker.mjs'))) {
+      throw new Error('更新包里没有自更新模块');
+    }
 
     const target = join(updateDir(), meta.version);
     if (existsSync(target)) rmSync(target, { recursive: true, force: true });
     renameSync(packageDir, target);
+    try {
+      if (Object.keys(pkg.dependencies || {}).length) installDependencies(target);
+      verifyDependencies(target, pkg);
+      try { chmodSync(join(target, 'bin', 'sidekick.mjs'), 0o755); } catch { /* Windows 上没意义 */ }
+    } catch (err) {
+      try { rmSync(target, { recursive: true, force: true }); } catch { /* 留给下次重试 */ }
+      throw err;
+    }
     return target;
   } finally {
     try { rmSync(tempRoot, { recursive: true, force: true }); } catch { /* 临时目录删不掉不影响 */ }

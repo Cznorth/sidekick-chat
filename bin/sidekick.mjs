@@ -40,6 +40,9 @@ async function main() {
     if (!skipCheck && update.needsCheck()) update.spawnUpdateWorker();
   }
 
+  // 0.3.0 的更新器下出来的新版没有 node_modules,第一次启动时补上。
+  if (update) update.ensureOwnDependencies();
+
   const { run } = await import('../src/main.mjs');
   await run(argv);
 }

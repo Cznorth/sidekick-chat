@@ -42,8 +42,11 @@ function makeTarball(version) {
   const root = tempDir();
   const pkg = join(root, 'package');
   mkdirSync(join(pkg, 'bin'), { recursive: true });
+  mkdirSync(join(pkg, 'src'), { recursive: true });
   writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: 'sidekick-chat', version, bin: { sidekick: 'bin/sidekick.mjs' } }));
   writeFileSync(join(pkg, 'bin', 'sidekick.mjs'), '#!/usr/bin/env node\nconsole.log("ok");\n');
+  writeFileSync(join(pkg, 'src', 'update.mjs'), 'export const ok = true;\n');
+  writeFileSync(join(pkg, 'src', 'update-worker.mjs'), '// worker\n');
   const archive = join(root, 'package.tgz');
   const result = spawnSync('tar', ['-czf', archive, '-C', root, 'package'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
