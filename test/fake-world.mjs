@@ -13,6 +13,7 @@ export function sseFrame(event, data) {
 
 export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botName = '秘书', context } = {}) {
   const messages = [];
+  const reads = [];
   const streams = new Set();
   let seq = 0;
   let agentPolls = 0;
@@ -88,6 +89,7 @@ export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botN
       return;
     }
     if (url.pathname === '/v1/team/read') {
+      let raw = ''; req.on('data', c => raw += c); req.on('end', () => reads.push(JSON.parse(raw || '{}')));
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ conv: url.searchParams.get('conv'), read: seq }));
       return;
@@ -111,6 +113,7 @@ export async function startFakeWorld({ token = TOKEN, primary = 'sidekick', botN
   return {
     url: `http://127.0.0.1:${port}`,
     token,
+    reads,
     state,
     emit: (event, data) => { for (const res of streams) res.write(sseFrame(event, data)); },
     close: () =>

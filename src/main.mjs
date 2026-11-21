@@ -294,11 +294,7 @@ async function startChat(flags) {
   let convId = pickConv(state, settings.conv);
   let latest = state.latest || 0;
   let everConnected = false;
-  // 「有人在看」才推进已读:调试时终端可以一直挂在那儿,而挂着的终端不该把手机上刚弹出的通知顶掉。
-  // 有按键才算在场(120 秒内),不在场时只把进度攒在 seenSeq 里,等下次动手再一起报。
-  const PRESENT_MS = 120_000;
-  // 0 = 启动以来还没人碰过这台终端:刚起来的窗口也不算在场,只靠 printHistory 那个显式动作推一次。
-  let lastInputAt = 0;
+  // 只在真实输入时确认此前已展示的消息;启动、重连和随后到达的消息都不自动已读。
   let seenSeq = 0;
   const displayed = new Set();
   const ctl = new AbortController();
@@ -326,16 +322,14 @@ async function startChat(flags) {
     if (!seenSeq) return;
     const seq = seenSeq;
     seenSeq = 0;
-    api.read(convId, seq).catch(() => {});
+    const id = convId;
+    api.read(id, seq).catch(() => { if (convId === id) seenSeq = Math.max(seenSeq, seq); });
   }
 
-  /** 用户在这台终端上动了一下(敲键、发消息、切会话):算在场,并把攒着的已读补报上去。 */
+  /** 用户在这台终端上动了一下(敲键、发消息、切会话):确认此前展示的消息。 */
   function markPresent() {
-    lastInputAt = Date.now();
     reportSeen();
   }
-
-  const present = () => lastInputAt > 0 && Date.now() - lastInputAt < PRESENT_MS;
 
   const printMessage = (message) => {
     const options = { bots: state.bots, color, attachmentUrl: (kind, name) => api.attachmentUrl(kind, name) };
@@ -375,9 +369,9 @@ async function startChat(flags) {
       printMessage(m);
     }
     latest = Math.max(latest, body.latest || 0);
-    // 刚把这段历史打到屏幕上(启动、切会话、/history),已读位置就到这里。
+    // 展示不等于已读,下次用户实际输入时再确认。
     seenSeq = 0;
-    if (body.latest) api.read(convId, body.latest).catch(() => {});
+    if (body.latest) seenSeq = Math.max(seenSeq, body.latest);
     if (body.messages.length === 0) out(paint(color, 'gray', '(这里还没有消息)'));
   }
 
@@ -425,8 +419,7 @@ async function startChat(flags) {
     }
     printMessage(m);
     if (typeof m.seq === 'number') {
-      if (present()) api.read(convId, m.seq).catch(() => {});
-      else seenSeq = Math.max(seenSeq, m.seq);
+      seenSeq = Math.max(seenSeq, m.seq);
     }
   }
 
